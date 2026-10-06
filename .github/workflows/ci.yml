@@ -113,6 +113,10 @@ jobs:
           mkdir -p .output/public
           echo '<!doctype html><title>ci</title>' > .output/public/index.html
 
+      # NOT "--locked" on purpose: the committed Cargo.lock is behind
+      # Cargo.toml (it lacks keyring and tauri-plugin-android-save). The
+      # drift step below hands you a refreshed lockfile to commit; after
+      # committing it, add --locked back to both commands.
       - name: cargo check
         working-directory: src-tauri
         run: cargo check --all-targets
@@ -120,6 +124,24 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test
+
+      - name: Detect Cargo.lock drift
+        id: drift
+        run: |
+          if git diff --quiet -- src-tauri/Cargo.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::src-tauri/Cargo.lock is out of date. Download the 'Cargo.lock-refreshed' artifact from this run and commit it."
+          fi
+
+      - name: Upload refreshed Cargo.lock
+        if: steps.drift.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cargo.lock-refreshed
+          path: src-tauri/Cargo.lock
+          retention-days: 14
 
       # Advisory only: reported in the log but not a gate. Remove
       # "continue-on-error" once the Rust code is clean under both.
@@ -159,11 +181,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
+      # ubuntu-latest already ships the Android SDK (ANDROID_HOME) and
+      # sdkmanager. android-actions/setup-android tries to re-install "tools"
+      # on top of it and fails, so use the preinstalled SDK directly.
+      - name: Prepare Android SDK and NDK
         run: |
-          sdkmanager --install "ndk;${NDK_VERSION}"
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -n1)
+          echo "Using $SDKM"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "ndk;${NDK_VERSION}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
