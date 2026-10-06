@@ -115,11 +115,11 @@ jobs:
 
       - name: cargo check
         working-directory: src-tauri
-        run: cargo check --locked --all-targets
+        run: cargo check --all-targets
 
       - name: cargo test
         working-directory: src-tauri
-        run: cargo test --locked
+        run: cargo test
 
       # Advisory only: reported in the log but not a gate. Remove
       # "continue-on-error" once the Rust code is clean under both.
@@ -131,7 +131,7 @@ jobs:
       - name: cargo clippy (advisory)
         continue-on-error: true
         working-directory: src-tauri
-        run: cargo clippy --locked --all-targets
+        run: cargo clippy --all-targets
 
   # ---------------------------------------------------------------------------
   # 3. Build the Android APK (only after both gates pass)
