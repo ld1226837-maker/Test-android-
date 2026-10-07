@@ -222,6 +222,21 @@ jobs:
       - name: Generate the Android project
         run: npx tauri android init --ci
 
+      # `tauri android init` ignores src-tauri/icons/android and ships the
+      # default launcher icons; `tauri icon` only writes into gen/ when it
+      # already exists. gen/ is regenerated in CI, so copy the committed
+      # custom icon set into the generated project.
+      - name: Apply custom launcher icons
+        run: |
+          set -euo pipefail
+          SRC=src-tauri/icons/android
+          RES=src-tauri/gen/android/app/src/main/res
+          test -d "$SRC" || { echo "::error::$SRC is missing"; exit 1; }
+          test -d "$RES" || { echo "::error::$RES was not generated"; exit 1; }
+          cp -rf "$SRC"/. "$RES"/
+          grep -q "ic_launcher_background" "$RES/values/ic_launcher_background.xml"
+          echo "Launcher icons applied from $SRC"
+
       # Safety net for R8 (release minification): Tink, pulled in by
       # androidx.security:security-crypto, references annotation classes that
       # are not in the APK. The plugin's consumer rules already ignore them;
