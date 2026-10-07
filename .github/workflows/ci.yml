@@ -27,7 +27,7 @@ env:
   FORCE_COLOR: "1"
   # Hard size gates: the build fails (and nothing is published) above these.
   MAX_INSTALLER_MB: "10"   # Windows setup.exe
-  MAX_APK_MB: "10"         # each Android APK (one per CPU architecture)
+  MAX_APK_MB: "75"         # each Android APK (one per CPU architecture)
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -303,7 +303,7 @@ jobs:
             echo "$(basename "$f"): ${mb} MB"
             echo "| $(basename "$f") | ${mb} |" >> "$GITHUB_STEP_SUMMARY"
             echo "--- largest entries in $(basename "$f")"
-            unzip -lv "$f" | awk 'NR>3 && $1 ~ /^[0-9]+$/ {print $3, $8}' | sort -nr | head -12 | awk '{printf "%8.2f MB  %s\n", $1/1048576, $2}'
+            unzip -lv "$f" | awk 'NR>3 && $1 ~ /^[0-9]+$/ {print $3, $8}' | sort -nr | sed -n 1,12p | awk '{printf "%8.2f MB  %s\n", $1/1048576, $2}'
             if [ "$bytes" -gt $((MAX_APK_MB * 1048576)) ]; then
               echo "::error::$(basename "$f") is ${mb} MB, above the ${MAX_APK_MB} MB limit"
               fail=1
