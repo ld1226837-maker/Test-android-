@@ -48,13 +48,16 @@
 /// none of them caller-nameable. Add a new slot by adding its name to
 /// `ALLOWED_ACCOUNTS` below, not by accepting an arbitrary caller-supplied
 /// name.
+#[cfg(not(target_os = "android"))]
 const KEYRING_SERVICE: &str = "turf-snack-ledger";
+#[cfg(not(target_os = "android"))]
 const ALLOWED_ACCOUNTS: &[&str] = &[
     "telegram-backup-token",
     "telegram-backup-extra-tokens",
     "backup-passphrase",
 ];
 
+#[cfg(not(target_os = "android"))]
 fn check_account(account: &str) -> Result<(), String> {
     if ALLOWED_ACCOUNTS.contains(&account) {
         Ok(())

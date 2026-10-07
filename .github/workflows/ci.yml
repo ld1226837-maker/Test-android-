@@ -1,20 +1,18 @@
 name: Android CI and Release
 
 # Every push to main and every pull request runs the full quality gate.
-# Publishing a GitHub Release happens ONLY when every job below succeeded AND
-#   - a tag like v0.1.0 is pushed (must equal "version" in src-tauri/tauri.conf.json), or
-#   - the workflow is started manually with "publish" ticked.
+# Whenever the build job produces its artifacts, they are PUBLISHED automatically
+# as a GitHub Release (no manual step):
+#   - push to main  -> pre-release tagged build-<run number>
+#   - tag v0.1.0    -> release (tag must equal "version" in src-tauri/tauri.conf.json)
+#   - manual run    -> pre-release tagged build-<run number>
+# Pull requests only build and upload the workflow artifact; they never publish.
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: "Publish a GitHub Release if every check passes"
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -224,10 +222,33 @@ jobs:
       - name: Generate the Android project
         run: npx tauri android init --ci
 
+      # Safety net for R8 (release minification): Tink, pulled in by
+      # androidx.security:security-crypto, references annotation classes that
+      # are not in the APK. The plugin's consumer rules already ignore them;
+      # this duplicates that in the generated app so a regenerated project can
+      # never lose it.
+      - name: R8 keep/dontwarn rules for the generated app
+        run: |
+          cat >> src-tauri/gen/android/app/proguard-rules.pro <<'EOF'
+          -dontwarn javax.annotation.**
+          -dontwarn javax.annotation.concurrent.**
+          -dontwarn com.google.errorprone.annotations.**
+          -dontwarn org.checkerframework.**
+          EOF
+
       # Always an optimized RELEASE build (a debug build is 10x larger), split
       # into one APK per CPU architecture so each device downloads only its own.
       - name: Build release APKs (split per ABI)
         run: npx tauri android build --apk --split-per-abi --target aarch64 --target armv7
+
+      - name: Upload R8 diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r8-diagnostics
+          path: src-tauri/gen/android/app/build/outputs/mapping/**/*.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Zipalign, sign and verify each APK
         env:
@@ -310,9 +331,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [quality, rust, build-android]
-    if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
