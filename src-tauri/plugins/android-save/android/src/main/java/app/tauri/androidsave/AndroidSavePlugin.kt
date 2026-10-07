@@ -360,7 +360,7 @@ class AndroidSavePlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun openFile(file: File, mimeType: String) {
         val uri = runCatching {
-            FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+            FileProvider.getUriForFile(activity, "${activity.packageName}.androidsave.fileprovider", file)
         }.getOrNull() ?: android.net.Uri.fromFile(file)
         openUri(uri.toString(), mimeType, false)
     }

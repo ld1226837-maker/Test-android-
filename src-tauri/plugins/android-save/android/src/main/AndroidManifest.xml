@@ -7,22 +7,38 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Android 11 (API 30) hides other installed apps unless declared here;
+         needed so the "open with device" fallback can find a viewer. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/pdf" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+        </intent>
+    </queries>
+
     <application>
-        <!-- Backs FileProvider.getUriForFile(..., "${applicationId}.fileprovider", ...)
-             in AndroidSavePlugin.openFile(), used only on API <= 28 to open a saved
-             file via ACTION_VIEW after save/print/share. Without this declaration the
-             call throws, openFile() swallows it and falls back to Uri.fromFile(), and
-             the resulting intent silently fails to resolve. API 29+ opens via the
-             MediaStore content:// URI directly and doesn't need this. -->
+        <!-- Backs FileProvider.getUriForFile(..., "${applicationId}.androidsave.fileprovider", ...)
+             in AndroidSavePlugin.openFile(), used only on API <= 28.
+
+             Uses AndroidSaveFileProvider (a trivial FileProvider subclass) instead of
+             the raw androidx.core.content.FileProvider: the app's auto-generated
+             manifest already declares a <provider> for the raw class, and the manifest
+             merger matches <provider> entries by android:name, so two entries naming
+             the same class collide ("Manifest merger failed ... FILE_PROVIDER_PATHS")
+             even when their authorities differ. -->
         <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
+            android:name="app.tauri.androidsave.AndroidSaveFileProvider"
+            android:authorities="${applicationId}.androidsave.fileprovider"
             android:exported="false"
-            android:grantUriPermissions="true"
-            tools:node="merge">
+            android:grantUriPermissions="true">
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/android_save_file_paths" />
+                android:resource="@xml/android_save_file_paths"
+                tools:replace="android:resource" />
         </provider>
     </application>
 </manifest>
