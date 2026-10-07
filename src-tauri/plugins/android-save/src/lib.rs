@@ -30,7 +30,10 @@ pub enum Error {
 }
 
 impl Serialize for Error {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
     }
 }
@@ -75,6 +78,13 @@ pub struct CopyUriRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CopyUriResponse {
+    /// Absolute path of the app-private copy (the TS side expects `{ path }`).
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeletePrivateFileRequest {
     pub path: String,
 }
@@ -84,6 +94,16 @@ pub struct DeletePrivateFileRequest {
 pub struct PrintPdfRequest {
     pub file_name: String,
     pub base64: String,
+}
+
+/// printPdf resolves with a JSObject map ({ printed: true }); all-optional so
+/// it deserializes from `{}` too. Declaring `()` here made Tauri reject the
+/// invoke ("invalid type: map, expected unit") and the app fell back to
+/// save-and-download after the print dialog opened.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintPdfResponse {
+    pub printed: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -155,48 +175,70 @@ impl<R: Runtime> AndroidSave<R> {
             .map_err(Into::into)
     }
 
-    pub fn copy_uri_to_private_file(&self, payload: CopyUriRequest) -> Result<String> {
-        self.0.run_mobile_plugin("copyUriToPrivateFile", payload).map_err(Into::into)
+    pub fn copy_uri_to_private_file(&self, payload: CopyUriRequest) -> Result<CopyUriResponse> {
+        self.0
+            .run_mobile_plugin("copyUriToPrivateFile", payload)
+            .map_err(Into::into)
     }
 
     pub fn delete_private_file(&self, payload: DeletePrivateFileRequest) -> Result<()> {
-        self.0.run_mobile_plugin("deletePrivateFile", payload).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("deletePrivateFile", payload)
+            .map_err(Into::into)
     }
 
-    pub fn print_pdf(&self, payload: PrintPdfRequest) -> Result<()> {
-        self.0.run_mobile_plugin("printPdf", payload).map_err(Into::into)
+    pub fn print_pdf(&self, payload: PrintPdfRequest) -> Result<PrintPdfResponse> {
+        self.0
+            .run_mobile_plugin("printPdf", payload)
+            .map_err(Into::into)
     }
 
     pub fn start_stream_save(&self, payload: StreamStartRequest) -> Result<()> {
-        self.0.run_mobile_plugin("startStreamSave", payload).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("startStreamSave", payload)
+            .map_err(Into::into)
     }
 
     pub fn append_stream_save(&self, payload: StreamChunkRequest) -> Result<()> {
-        self.0.run_mobile_plugin("appendStreamSave", payload).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("appendStreamSave", payload)
+            .map_err(Into::into)
     }
 
     pub fn finish_stream_save(&self, payload: StreamFinishRequest) -> Result<StreamFinishResponse> {
-        self.0.run_mobile_plugin("finishStreamSave", payload).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("finishStreamSave", payload)
+            .map_err(Into::into)
     }
 
     pub fn abort_stream_save(&self, payload: StreamAbortRequest) -> Result<()> {
-        self.0.run_mobile_plugin("abortStreamSave", payload).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("abortStreamSave", payload)
+            .map_err(Into::into)
     }
 
     pub fn cleanup_pending_exports(&self) -> Result<()> {
-        self.0.run_mobile_plugin("cleanupPendingExports", ()).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("cleanupPendingExports", ())
+            .map_err(Into::into)
     }
 
     pub fn secure_set(&self, payload: SecureSetRequest) -> Result<()> {
-        self.0.run_mobile_plugin("secureSet", payload).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("secureSet", payload)
+            .map_err(Into::into)
     }
 
     pub fn secure_get(&self, payload: SecureKeyRequest) -> Result<SecureGetResponse> {
-        self.0.run_mobile_plugin("secureGet", payload).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("secureGet", payload)
+            .map_err(Into::into)
     }
 
     pub fn secure_delete(&self, payload: SecureKeyRequest) -> Result<()> {
-        self.0.run_mobile_plugin("secureDelete", payload).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("secureDelete", payload)
+            .map_err(Into::into)
     }
 }
 
@@ -215,18 +257,24 @@ impl<R: Runtime> AndroidSave<R> {
     }
 
     pub fn open_private_file(&self, _payload: SaveRequest) -> Result<SaveResponse> {
-        Err(Error::Plugin("android-save is only available on Android".into()))
+        Err(Error::Plugin(
+            "android-save is only available on Android".into(),
+        ))
     }
 
-    pub fn copy_uri_to_private_file(&self, _payload: CopyUriRequest) -> Result<String> {
-        Err(Error::Plugin("android-save is only available on Android".into()))
+    pub fn copy_uri_to_private_file(&self, _payload: CopyUriRequest) -> Result<CopyUriResponse> {
+        Err(Error::Plugin(
+            "android-save is only available on Android".into(),
+        ))
     }
 
     pub fn delete_private_file(&self, _payload: DeletePrivateFileRequest) -> Result<()> {
-        Err(Error::Plugin("android-save is only available on Android".into()))
+        Err(Error::Plugin(
+            "android-save is only available on Android".into(),
+        ))
     }
 
-    pub fn print_pdf(&self, _payload: PrintPdfRequest) -> Result<()> {
+    pub fn print_pdf(&self, _payload: PrintPdfRequest) -> Result<PrintPdfResponse> {
         Err(Error::Plugin(
             "android-save is only available on Android".into(),
         ))
@@ -244,7 +292,10 @@ impl<R: Runtime> AndroidSave<R> {
         ))
     }
 
-    pub fn finish_stream_save(&self, _payload: StreamFinishRequest) -> Result<StreamFinishResponse> {
+    pub fn finish_stream_save(
+        &self,
+        _payload: StreamFinishRequest,
+    ) -> Result<StreamFinishResponse> {
         Err(Error::Plugin(
             "android-save is only available on Android".into(),
         ))
@@ -292,7 +343,10 @@ impl<R: Runtime, T: Manager<R>> AndroidSaveExt<R> for T {
 }
 
 #[tauri::command]
-fn print_pdf<R: Runtime>(app: tauri::AppHandle<R>, payload: PrintPdfRequest) -> Result<()> {
+fn print_pdf<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    payload: PrintPdfRequest,
+) -> Result<PrintPdfResponse> {
     app.android_save().print_pdf(payload)
 }
 
@@ -342,17 +396,26 @@ fn save_to_downloads<R: Runtime>(
 }
 
 #[tauri::command]
-fn open_private_file<R: Runtime>(app: tauri::AppHandle<R>, payload: SaveRequest) -> Result<SaveResponse> {
+fn open_private_file<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    payload: SaveRequest,
+) -> Result<SaveResponse> {
     app.android_save().open_private_file(payload)
 }
 
 #[tauri::command]
-fn copy_uri_to_private_file<R: Runtime>(app: tauri::AppHandle<R>, payload: CopyUriRequest) -> Result<String> {
+fn copy_uri_to_private_file<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    payload: CopyUriRequest,
+) -> Result<CopyUriResponse> {
     app.android_save().copy_uri_to_private_file(payload)
 }
 
 #[tauri::command]
-fn delete_private_file<R: Runtime>(app: tauri::AppHandle<R>, payload: DeletePrivateFileRequest) -> Result<()> {
+fn delete_private_file<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    payload: DeletePrivateFileRequest,
+) -> Result<()> {
     app.android_save().delete_private_file(payload)
 }
 
