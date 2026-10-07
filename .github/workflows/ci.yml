@@ -1,4 +1,4 @@
-name: Android CI and Release
+name: Windows CI and Release
 
 # Every push to main and every pull request runs the full quality gate.
 # Whenever the build job produces its artifacts, they are PUBLISHED automatically
@@ -169,18 +169,16 @@ jobs:
         run: cargo clippy --all-targets || echo "::warning::clippy reported problems (advisory)"
 
   # ---------------------------------------------------------------------------
-  # 3. Build the Android APK (only after both gates pass)
+  # 3. Build the Windows installer (only after both gates pass)
   # ---------------------------------------------------------------------------
-  build-android:
-    name: Build Android APK
+  build-windows:
+    name: Build Windows installer
     needs: [quality, rust]
-    runs-on: ubuntu-24.04
+    runs-on: windows-latest
     timeout-minutes: 60
-    env:
-      NDK_VERSION: "27.2.12479018"
-      # "true" when the signing secrets are configured. Otherwise the release
-      # APKs are signed with a temporary CI key (installable, not updatable).
-      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v6
 
@@ -189,28 +187,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      # ubuntu-latest already ships the Android SDK (ANDROID_HOME) and
-      # sdkmanager. android-actions/setup-android tries to re-install "tools"
-      # on top of it and fails, so use the preinstalled SDK directly.
-      - name: Prepare Android SDK and NDK
-        run: |
-          set -euo pipefail
-          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -n1)
-          echo "Using $SDKM"
-          yes | "$SDKM" --licenses > /dev/null || true
-          "$SDKM" --install "ndk;${NDK_VERSION}"
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
-
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -219,108 +196,45 @@ jobs:
       - name: Install dependencies (exact lockfile)
         run: npm ci --no-audit --no-fund
 
-      - name: Generate the Android project
-        run: npx tauri android init --ci
+      # tauri.conf.json: targets ["nsis"], beforeBuildCommand "npm run build".
+      - name: Build NSIS installer
+        run: npx tauri build
 
-      # Safety net for R8 (release minification): Tink, pulled in by
-      # androidx.security:security-crypto, references annotation classes that
-      # are not in the APK. The plugin's consumer rules already ignore them;
-      # this duplicates that in the generated app so a regenerated project can
-      # never lose it.
-      - name: R8 keep/dontwarn rules for the generated app
-        run: |
-          cat >> src-tauri/gen/android/app/proguard-rules.pro <<'EOF'
-          -dontwarn javax.annotation.**
-          -dontwarn javax.annotation.concurrent.**
-          -dontwarn com.google.errorprone.annotations.**
-          -dontwarn org.checkerframework.**
-          EOF
-
-      # Always an optimized RELEASE build (a debug build is 10x larger), split
-      # into one APK per CPU architecture so each device downloads only its own.
-      - name: Build release APKs (split per ABI)
-        run: npx tauri android build --apk --split-per-abi --target aarch64 --target armv7
-
-      - name: Upload R8 diagnostics on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: r8-diagnostics
-          path: src-tauri/gen/android/app/build/outputs/mapping/**/*.txt
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Zipalign, sign and verify each APK
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Collect installer and checksums
         run: |
           set -euo pipefail
           VERSION=$(jq -r .version src-tauri/tauri.conf.json)
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
-          mkdir -p dist work
-          if [ "$HAS_KEYSTORE" = "true" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > work/release.jks
-            KS_ALIAS="$ANDROID_KEY_ALIAS"
-            KS_PASS="$ANDROID_KEYSTORE_PASSWORD"
-            KEY_PASS="$ANDROID_KEY_PASSWORD"
-          else
-            # No secrets configured: sign with a throw-away key so the APK is
-            # installable. A new key every run means a new run's APK cannot
-            # update an older install; add the four ANDROID_* secrets to fix.
-            KS_ALIAS=ci
-            KS_PASS=$(openssl rand -hex 16)
-            KEY_PASS="$KS_PASS"
-            keytool -genkeypair -keystore work/release.jks -alias "$KS_ALIAS" \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass "$KS_PASS" -keypass "$KEY_PASS" -dname "CN=Truff Snacks CI"
-            echo "Signed with a temporary CI key. Uninstall any older build before installing; add the ANDROID_* signing secrets for updatable releases." > dist/SIGNING-NOTE.txt
-          fi
-          export KS_PASS KEY_PASS
-          mapfile -t APKS < <(find src-tauri/gen/android -name '*release-unsigned.apk' | sort)
-          test "${#APKS[@]}" -gt 0
-          for APK in "${APKS[@]}"; do
-            base=$(basename "$APK" -release-unsigned.apk)
-            abi=${base#app-}
-            "$BT/zipalign" -p -f 4 "$APK" "work/${abi}.apk"
-            OUT="dist/truff-android-v${VERSION}-${abi}.apk"
-            "$BT/apksigner" sign --ks work/release.jks --ks-key-alias "$KS_ALIAS" \
-              --ks-pass env:KS_PASS --key-pass env:KEY_PASS --out "$OUT" "work/${abi}.apk"
-            "$BT/apksigner" verify "$OUT"
-          done
-          rm -rf work
+          mkdir -p dist
+          EXE=$(find src-tauri/target/release/bundle/nsis -name '*-setup.exe' | head -n1)
+          test -n "$EXE"
+          cp "$EXE" "dist/truff-windows-v${VERSION}-setup.exe"
+          cd dist
+          ls -l
+          sha256sum *.exe > SHA256SUMS.txt
 
-      - name: APK size report and gate
+      - name: Installer size report and gate
         run: |
           set -uo pipefail
+          APP=$(find src-tauri/target/release -maxdepth 1 -name '*.exe' | head -n1)
           fail=0
-          { echo "### Android APK sizes (limit ${MAX_APK_MB} MB each)"; echo; echo "| APK | MB |"; echo "|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
-          for f in dist/*.apk; do
+          { echo "### Windows sizes (limit ${MAX_INSTALLER_MB} MB installer)"; echo; echo "| file | MB |"; echo "|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
+          for f in "$APP" dist/*.exe; do
             bytes=$(stat -c%s "$f")
             mb=$(awk -v b="$bytes" 'BEGIN{printf "%.2f", b/1048576}')
             echo "$(basename "$f"): ${mb} MB"
             echo "| $(basename "$f") | ${mb} |" >> "$GITHUB_STEP_SUMMARY"
-            echo "--- largest entries in $(basename "$f")"
-            unzip -lv "$f" | awk 'NR>3 && $1 ~ /^[0-9]+$/ {print $3, $8}' | sort -nr | sed -n 1,12p | awk '{printf "%8.2f MB  %s\n", $1/1048576, $2}'
-            if [ "$bytes" -gt $((MAX_APK_MB * 1048576)) ]; then
-              echo "::error::$(basename "$f") is ${mb} MB, above the ${MAX_APK_MB} MB limit"
-              fail=1
-            fi
           done
+          bytes=$(stat -c%s dist/*.exe)
+          if [ "$bytes" -gt $((MAX_INSTALLER_MB * 1048576)) ]; then
+            echo "::error::Installer is $((bytes / 1048576)) MB, above the ${MAX_INSTALLER_MB} MB limit. Check webviewInstallMode in tauri.conf.json (offlineInstaller embeds ~180 MB)."
+            fail=1
+          fi
           exit $fail
-
-      - name: Checksums
-        run: |
-          cd dist
-          ls -l
-          sha256sum *.apk > SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v7
         if: always() && hashFiles('dist/*') != ''
         with:
-          name: android-apk
+          name: windows-installer
           path: dist/*
           if-no-files-found: error
           retention-days: 30
@@ -330,7 +244,7 @@ jobs:
   # ---------------------------------------------------------------------------
   publish:
     name: Publish GitHub Release
-    needs: [quality, rust, build-android]
+    needs: [quality, rust, build-windows]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -339,7 +253,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v7
         with:
-          name: android-apk
+          name: windows-installer
           path: dist
 
       - name: Release name and type
@@ -350,9 +264,7 @@ jobs:
           else
             echo "tag=build-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
-          if [ -f dist/SIGNING-NOTE.txt ]; then
-            echo "pre=true" >> "$GITHUB_OUTPUT"
-          elif [ "${GITHUB_REF_TYPE}" != "tag" ] || [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+          if [ "${GITHUB_REF_TYPE}" != "tag" ] || [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             echo "pre=true" >> "$GITHUB_OUTPUT"
           else
             echo "pre=false" >> "$GITHUB_OUTPUT"
@@ -362,11 +274,10 @@ jobs:
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Truff Snacks Android ${{ steps.rel.outputs.tag }}
+          name: Truff Snacks Windows ${{ steps.rel.outputs.tag }}
           prerelease: ${{ steps.rel.outputs.pre == 'true' }}
           generate_release_notes: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           files: |
-            dist/*.apk
+            dist/*.exe
             dist/SHA256SUMS.txt
-            dist/SIGNING-NOTE.txt
