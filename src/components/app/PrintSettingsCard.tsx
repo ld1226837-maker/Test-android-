@@ -47,6 +47,7 @@ import {
   type SampleDocumentKind,
 } from "@/lib/document-samples";
 import { buildReceiptPdf, printReceipt } from "@/lib/receipt";
+import { isAndroid } from "@/lib/desktop";
 import {
   SettingsActions,
   SettingsField,
@@ -389,31 +390,34 @@ export function PrintSettingsCard({
                   />
                 </SettingsField>
               )}
-              <SettingsField
-                label="Print method"
-                hint="Pick exactly one — Print always uses just this, never both."
-              >
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  value={settings.printMethod}
-                  onValueChange={(v) =>
-                    v && set("printMethod", v as PrintMethod)
-                  }
-                  className="w-full justify-stretch"
+              {/* Windows-only: Android always uses its own print dialog. */}
+              {!isAndroid() && (
+                <SettingsField
+                  label="Print method"
+                  hint="Pick exactly one — Print always uses just this, never both."
                 >
-                  {PRINT_METHOD_OPTIONS.map((opt) => (
-                    <ToggleGroupItem
-                      key={opt.id}
-                      value={opt.id}
-                      className="flex-1 text-xs"
-                    >
-                      {opt.label}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </SettingsField>
-              {settings.printMethod === "named-printer" && (
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    value={settings.printMethod}
+                    onValueChange={(v) =>
+                      v && set("printMethod", v as PrintMethod)
+                    }
+                    className="w-full justify-stretch"
+                  >
+                    {PRINT_METHOD_OPTIONS.map((opt) => (
+                      <ToggleGroupItem
+                        key={opt.id}
+                        value={opt.id}
+                        className="flex-1 text-xs"
+                      >
+                        {opt.label}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </SettingsField>
+              )}
+              {!isAndroid() && settings.printMethod === "named-printer" && (
                 <SettingsField
                   label="Printer"
                   hint="Sends jobs straight to this printer — no dialog appears."
@@ -652,7 +656,7 @@ export function PrintSettingsCard({
               <Button
                 variant="outline"
                 onClick={() =>
-                  settings.printMethod === "pdf"
+                  !isAndroid() && settings.printMethod === "pdf"
                     ? showLayoutPreview()
                     : printReceipt(sample, settings)
                 }

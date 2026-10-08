@@ -992,9 +992,16 @@ function printPdfFrame(url: string): Promise<boolean> {
 /** Opens the print dialog with one serialized job per requested copy. */
 export async function printReceipt(
   doc: ReceiptDoc,
-  s: PrintSettings = readPrintSettings(),
+  settings: PrintSettings = readPrintSettings(),
   section?: InvoiceSection,
 ) {
+  // "PDF print" / "Chosen printer" are Windows-only. Android always goes
+  // through its own native print dialog, even if the saved settings (e.g.
+  // restored from a Windows backup) say otherwise.
+  const s: PrintSettings =
+    isAndroid() && settings.printMethod !== "system"
+      ? { ...settings, printMethod: "system" }
+      : settings;
   const pdf = await buildReceiptPdfWithPhoto(doc, s);
   const url = pdf.output("bloburl") as unknown as string;
 

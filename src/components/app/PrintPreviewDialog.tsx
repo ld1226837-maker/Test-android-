@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import type { InvoiceSection } from "@/lib/desktop";
+import { isAndroid, type InvoiceSection } from "@/lib/desktop";
 import {
   PAPER_TYPES,
   PRINT_METHOD_OPTIONS,
@@ -158,25 +158,30 @@ export function PrintPreviewDialog({
               </SelectContent>
             </Select>
           </label>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Print method</span>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              value={printMethod}
-              onValueChange={(v) => v && setPrintMethod(v as PrintMethod)}
-            >
-              {PRINT_METHOD_OPTIONS.map((opt) => (
-                <ToggleGroupItem
-                  key={opt.id}
-                  value={opt.id}
-                  className="text-xs"
-                >
-                  {opt.label}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </div>
+          {/* Windows-only: Android always uses its own print dialog. */}
+          {!isAndroid() && (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">
+                Print method
+              </span>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                value={printMethod}
+                onValueChange={(v) => v && setPrintMethod(v as PrintMethod)}
+              >
+                {PRINT_METHOD_OPTIONS.map((opt) => (
+                  <ToggleGroupItem
+                    key={opt.id}
+                    value={opt.id}
+                    className="text-xs"
+                  >
+                    {opt.label}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
+          )}
         </div>
 
         {previewUrl ? (
