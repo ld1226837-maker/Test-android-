@@ -32,12 +32,16 @@ vi.mock("sonner", () => ({
 
 // Platform switches — everything else in ./desktop stays real.
 const platform = { android: false, desktop: false };
+const { printPdfFile } = vi.hoisted(() => ({
+  printPdfFile: vi.fn(async (..._args: unknown[]) => ({ printed: true })),
+}));
 vi.mock("./desktop", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./desktop")>();
   return {
     ...actual,
     isAndroid: () => platform.android,
     isDesktop: () => platform.desktop,
+    printPdfFile,
   };
 });
 
@@ -56,12 +60,13 @@ const withMethod = (printMethod: Method) => ({
   selectedPrinter: "Some Windows Printer",
 });
 
-describe("printReceipt on Android always uses the default print path", () => {
+describe("printReceipt on Android always uses the native print dialog", () => {
   let openSpy: ReturnType<typeof vi.spyOn>;
   let appended: HTMLElement[];
 
   beforeEach(() => {
     toastError.mockReset();
+    printPdfFile.mockClear();
     appended = [];
     URL.createObjectURL = vi.fn(() => "blob:test");
     URL.revokeObjectURL = vi.fn();
@@ -98,7 +103,8 @@ describe("printReceipt on Android always uses the default print path", () => {
       platform.android = true;
       platform.desktop = true; // Tauri Android reports isDesktop() === true
       await printReceipt(sampleDocument("sales"), withMethod(method));
-      expect(appended.length).toBeGreaterThan(0); // went through print frame
+      expect(printPdfFile).toHaveBeenCalledTimes(1); // native PrintManager
+      expect(appended.length).toBe(0); // never the iframe path
       expect(openSpy).not.toHaveBeenCalled(); // no PDF window
       expect(toastError).not.toHaveBeenCalled(); // no "needs Windows" error
     });

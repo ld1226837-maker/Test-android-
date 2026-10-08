@@ -19,6 +19,7 @@ import {
   isAndroid,
   isDesktop,
   openExternal,
+  printPdfFile,
   revealInFolder,
   saveExportFile,
   saveToInvoicesFolder,
@@ -1107,6 +1108,34 @@ export async function printReceipt(
       });
     }
     URL.revokeObjectURL(url);
+    return;
+  }
+
+  // Android: hand the PDF to the OS print framework (PrintManager) through
+  // the android-save plugin. The hidden-iframe `window.print()` path below
+  // cannot work in Android's WebView (no embedded PDF viewer, and
+  // `print()` on a frame is a no-op), which is why Print used to do
+  // nothing. The system dialog has its own printer picker and copies
+  // control, so `s.copies` is not applied here. If the native call fails,
+  // fall back to saving into Downloads and opening the file, so Print
+  // never ends up as a dead button.
+  if (isAndroid()) {
+    const bytes = new Uint8Array(pdf.output("arraybuffer") as ArrayBuffer);
+    const result = await printPdfFile(bytes, `${doc.fileName}.pdf`);
+    URL.revokeObjectURL(url);
+    if (result.printed) return;
+    const saved = await saveExportFile(
+      bytes,
+      `${doc.fileName}.pdf`,
+      "application/pdf",
+      true,
+    );
+    toast.error("Couldn't open the Android print dialog", {
+      description: saved.saved
+        ? `${result.error ?? "Unknown error"} — the PDF was saved to Downloads and opened instead.`
+        : (result.error ?? saved.error ?? "Unknown error"),
+      duration: 10_000,
+    });
     return;
   }
 
