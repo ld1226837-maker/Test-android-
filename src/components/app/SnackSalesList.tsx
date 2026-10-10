@@ -69,6 +69,8 @@ import { LayoutPart, LayoutParts } from "./LayoutSection";
 import { ConfirmDeleteButton } from "./ConfirmDeleteButton";
 import { RecordActionRow } from "./RecordActionRow";
 import { SortMenu } from "./SortMenu";
+import { receiptModeLabel, receiptPaymentRows } from "@/lib/payments";
+import { modeBreakdown, modeExportColumns } from "@/lib/payment-breakdown";
 import { usePrintPreview } from "@/lib/use-print-preview";
 
 const PAGE_SIZE = 25;
@@ -185,7 +187,7 @@ export function SnackSalesList() {
   const exportSales = () =>
     exportToExcel(
       dateFilteredSales.flatMap((s) =>
-        s.items.map((it) => ({
+        s.items.map((it, idx) => ({
           "Bill No": s.bill_no,
           Date: formatDMY(s.sale_date),
           Customer: s.customer_name ?? "",
@@ -194,7 +196,14 @@ export function SnackSalesList() {
           "Unit Price": it.unit_price,
           Amount: it.amount,
           Profit: rupees(it.amount - it.qty * it.cost_price),
-          "Payment Mode": s.payment_mode,
+          "Payment Mode": receiptModeLabel("snack_sale", s.id, s.payment_mode),
+          // Sale-level money, printed once (first item row) so a sheet sum
+          // never counts a split sale more than once.
+          ...(idx === 0
+            ? modeExportColumns(
+                modeBreakdown(receiptPaymentRows("snack_sale", s.id)),
+              )
+            : { "Paid - Cash": "", "Paid - Online": "", "Split detail": "" }),
           Notes: s.notes ?? "",
         })),
       ),
@@ -350,7 +359,21 @@ export function SnackSalesList() {
                             )}
                           </div>
                           <p className="text-muted-foreground">
-                            {formatDMY(s.sale_date)} · {s.payment_mode}
+                            {formatDMY(s.sale_date)} ·{" "}
+                            {receiptModeLabel(
+                              "snack_sale",
+                              s.id,
+                              s.payment_mode,
+                            )}
+                            {s.payment_mode !== "On tab" &&
+                              (() => {
+                                const mb = modeBreakdown(
+                                  receiptPaymentRows("snack_sale", s.id),
+                                );
+                                return mb.total > 0
+                                  ? ` · Cash ${money(mb.cash)} · Online ${money(mb.online)}`
+                                  : "";
+                              })()}
                             {s.booking_no ? ` · Linked to ${s.booking_no}` : ""}
                           </p>
                           <ul className="mt-1 text-muted-foreground">
