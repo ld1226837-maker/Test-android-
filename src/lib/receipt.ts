@@ -1772,7 +1772,9 @@ function bookingReceiptRaw(b: TurfBooking): ReceiptDoc {
       // payable / balance / mode rows are hidden from print (copy text keeps
       // them) and an unsettled balance is still printed.
       { label: "Paid", value: pmoney(b.advance_paid), small: true },
-      ...remainingView.remainingRows.map((r) => (due > 0 ? r : { ...r, printHide: true })),
+      ...remainingView.remainingRows.map((r) =>
+        due > 0 ? r : { ...r, printHide: true },
+      ),
       // Advance and balance each get their own Mode line (never one
       // combined Cash + UPI total across both).
       ...(remainingView.balancePaid > 0
