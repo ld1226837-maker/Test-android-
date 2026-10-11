@@ -47,7 +47,17 @@ import {
 } from "@/lib/ops";
 import { useCorrectSnackSaleMode } from "@/lib/collect";
 import { advanceEntries } from "@/lib/split-payment";
-import { dueNoForRef, saleMovedToDues, saleStateLabel } from "@/lib/dues";
+import {
+  dueNoForRef,
+  saleMovedToDues,
+  saleStateLabel,
+  snackSaleCollected,
+} from "@/lib/dues";
+import {
+  buildPaymentModeLookup,
+  mergedModeColumns,
+} from "@/lib/payment-columns";
+import { readAppSettings } from "@/lib/settings";
 import { TAB_REF_SNACK_SALE, useTabEntries } from "@/lib/tabs";
 import { cn, errorMessage } from "@/lib/utils";
 import {
@@ -182,10 +192,30 @@ export function SnackSalesList() {
     [dateFilteredSales, page],
   );
 
+  // Cash / Online / split for the Excel export, from the same payment rows
+  // the Dashboard split uses (see lib/payment-columns.ts).
+  const saleModes = useMemo(() => {
+    const settings = readAppSettings();
+    return buildPaymentModeLookup(
+      "snack_sale",
+      sales.map((s) => ({
+        id: s.id,
+        collected: snackSaleCollected(s, settings),
+        mode: s.payment_mode ?? null,
+        date: s.sale_date,
+      })),
+      payments,
+    );
+  }, [sales, payments]);
+
   const exportSales = () =>
     exportToExcel(
-      dateFilteredSales.flatMap((s) =>
-        s.items.map((it) => ({
+      dateFilteredSales.flatMap((s) => {
+        const modes = saleModes(s.id);
+        // A sale merged into a bill keeps its money on the bill: numbers 0,
+        // text still says how it was paid.
+        const cols = s.merged_into_bill_id ? mergedModeColumns(modes) : modes;
+        return s.items.map((it, i) => ({
           "Bill No": s.bill_no,
           Date: formatDMY(s.sale_date),
           Customer: s.customer_name ?? "",
@@ -195,9 +225,15 @@ export function SnackSalesList() {
           Amount: it.amount,
           Profit: rupees(it.amount - it.qty * it.cost_price),
           "Payment Mode": s.payment_mode,
+          // Money columns only on a sale's first item row, so a SUM over the
+          // sheet never counts a multi-item sale's payment more than once.
+          "Paid - Cash": i === 0 ? cols["Paid - Cash"] : 0,
+          "Paid - Online": i === 0 ? cols["Paid - Online"] : 0,
+          "Payment type": cols["Payment type"],
+          "Split detail": cols["Split detail"],
           Notes: s.notes ?? "",
-        })),
-      ),
+        }));
+      }),
       `snack-sales-${sortSuffix(sort.field, sort.dir)}`,
       "Snack Sales",
       INVOICE_SECTIONS.snacks,

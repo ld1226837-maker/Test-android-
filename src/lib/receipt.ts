@@ -37,8 +37,14 @@ import {
 } from "./print";
 import { printPdfBytesAsImages } from "./print-raster";
 import { buildPremiumReceiptPdf } from "./receipt-premium";
-import { receiptAdvanceAmount, receiptModeLabel } from "./payments";
+import {
+  receiptAdvanceAmount,
+  receiptModeLabel,
+  receiptPaymentRows,
+} from "./payments";
+import { modeBreakdown, modeBreakdownOf, modeLines } from "./payment-breakdown";
 import { mergedBillBreakdown } from "./merge-breakdown";
+import { joinNotes, pdfSafeText, remainingSummary } from "./remaining-summary";
 import { readAppSettings } from "./settings";
 
 /** PDF-safe money: helvetica has no rupee glyph, and receipts drop paise.
@@ -122,9 +128,12 @@ const DENSITY_SHADE: Record<PrintSettings["density"], number> = {
  * roll width) silently falls through to the classic renderer below, same as
  * if "classic" had been selected. */
 export function buildReceiptPdf(
-  doc: ReceiptDoc,
+  docIn: ReceiptDoc,
   s: PrintSettings = readPrintSettings(),
 ): jsPDF {
+  // Every printed text goes through the same rupee-sign swap, so no receipt
+  // type (bill, booking, payment, voucher, statement) can print "₹".
+  const doc = rupeeSafe(docIn);
   // The premium letterhead layouts are sales-invoice designs (Bill To card,
   // item table); voucher/statement documents use the classic renderer's
   // detail layout with the same logo/banner/shop header.
@@ -1260,7 +1269,45 @@ export async function shareReceipt(
 
 export { safeFilePart };
 
-export function billReceipt(bill: Bill): ReceiptDoc {
+/** Swaps the rupee sign (which the PDF fonts cannot draw) for "Rs " in every
+ * printed text of a document. Display only. */
+function rupeeSafe(doc: ReceiptDoc): ReceiptDoc {
+  return {
+    ...doc,
+    lines: doc.lines.map((l) => ({
+      ...l,
+      label: pdfSafeText(l.label),
+      ...(l.sub !== undefined ? { sub: pdfSafeText(l.sub) } : {}),
+      ...(l.amountText !== undefined
+        ? { amountText: pdfSafeText(l.amountText) }
+        : {}),
+    })),
+    totals: doc.totals.map((t) => ({
+      ...t,
+      label: pdfSafeText(t.label),
+      value: pdfSafeText(t.value),
+    })),
+    ...(doc.note ? { note: pdfSafeText(doc.note) } : {}),
+    ...(doc.details
+      ? {
+          details: doc.details.map((d) => ({
+            ...d,
+            label: pdfSafeText(d.label),
+            value: pdfSafeText(d.value),
+          })),
+        }
+      : {}),
+  };
+}
+
+export const billReceipt = (bill: Bill): ReceiptDoc =>
+  rupeeSafe(billReceiptRaw(bill));
+export const bookingReceipt = (b: TurfBooking): ReceiptDoc =>
+  rupeeSafe(bookingReceiptRaw(b));
+export const snackSaleReceipt = (s: SnackSale): ReceiptDoc =>
+  rupeeSafe(snackSaleReceiptRaw(s));
+
+function billReceiptRaw(bill: Bill): ReceiptDoc {
   // Printed from the bill's own frozen tax snapshot, never recomputed at
   // print time, so a reprint after a rate change is byte-identical to the
   // copy the customer first received.
@@ -1275,6 +1322,33 @@ export function billReceipt(bill: Bill): ReceiptDoc {
     grandTotal,
     itemCount: bill.items.length,
   });
+  // How the money on a MERGED bill was received (Cash / Online / split),
+  // from the payment rows copied onto the bill at merge time. Display only.
+  // Legacy merged bills (no stored breakdown) keep printing exactly as before.
+  const received = modeBreakdown(receiptPaymentRows("bill", bill.id));
+  const showReceived = Boolean(merged) && received.total > 0;
+  const turfPaid = modeBreakdownOf(bill.merged_breakdown?.turf_modes);
+  // Display only: what is left to pay after the advances, plus a payment note.
+  const remainingView = remainingSummary({
+    grandTotal,
+    advances: merged
+      ? merged.advancePaid + merged.snacksPaid
+      : paid
+        ? Math.min(paid, receiptAdvanceAmount("bill", bill.id, paid))
+        : 0,
+    paid,
+    fmt: pmoney,
+    cancelled: bill.status === "cancelled",
+    payments: receiptPaymentRows("bill", bill.id),
+    fallbackMode: bill.payment_mode,
+    fallbackDate: bill.bill_date,
+    fmtDate: formatDMY,
+  });
+  const modeValue = showReceived
+    ? received.split
+      ? `Split (${received.modes.map((m) => m.mode).join(" + ")})`
+      : (received.modes[0]?.mode ?? "")
+    : bill.payment_mode;
   // Narrow thermal rolls get the abbreviated unit ("2.5 L" instead of
   // "2.5 litre") in the QTY column so the value never has to be clipped with
   // an ellipsis to fit. Sheets (A4/A5/Letter) have plenty of column width and
@@ -1309,7 +1383,13 @@ export function billReceipt(bill: Bill): ReceiptDoc {
             ? [{ label: "Offer / Discount", amount: -bill.discount }]
             : []),
           ...(merged.advancePaid > 0
-            ? [{ label: "Advance paid", amount: -merged.advancePaid }]
+            ? [
+                {
+                  label: "Advance paid",
+                  ...(turfPaid.detail ? { sub: turfPaid.detail } : {}),
+                  amount: -merged.advancePaid,
+                },
+              ]
             : []),
           ...(merged.snacksPaid > 0
             ? [{ label: "Snacks paid", amount: -merged.snacksPaid }]
@@ -1361,13 +1441,32 @@ export function billReceipt(bill: Bill): ReceiptDoc {
           ]
         : []),
       { label: "GRAND TOTAL", value: pmoney(grandTotal), strong: true },
+      ...(remainingView.payableRow ? [remainingView.payableRow] : []),
       { label: "Paid", value: pmoney(paid) },
-      ...(due > 0 ? [{ label: "Balance due", value: pmoney(due) }] : []),
-      ...(bill.payment_mode
-        ? [{ label: "Mode", value: bill.payment_mode }]
+      ...remainingView.remainingRows,
+      // Merged bill: how the collected money arrived — Cash, Online and the
+      // split — plus the turf and per-snack-bill parts.
+      ...(showReceived ? modeLines(received, pmoney) : []),
+      ...(showReceived && turfPaid.total > 0
+        ? [{ label: "Turf paid", value: turfPaid.detail }]
         : []),
+      ...(showReceived
+        ? (bill.merged_breakdown?.snacks ?? []).flatMap((sn) => {
+            const d = modeBreakdownOf(sn.modes);
+            return d.total > 0
+              ? [
+                  {
+                    label: `Snacks paid${sn.bill_no ? ` (${sn.bill_no})` : ""}`,
+                    value: d.detail,
+                  },
+                ]
+              : [];
+          })
+        : []),
+      ...(modeValue ? [{ label: "Mode", value: modeValue }] : []),
       { label: "Status", value: bill.status.toUpperCase() },
     ],
+    note: remainingView.note,
     balanceDue: due,
     fileName: `${safeFilePart(bill.invoice_no)}-${safeFilePart(bill.customer_name, "customer")}`,
   };
@@ -1383,7 +1482,7 @@ const durationText = (hours: number) => {
   return `${m} min`;
 };
 
-export function bookingReceipt(b: TurfBooking): ReceiptDoc {
+function bookingReceiptRaw(b: TurfBooking): ReceiptDoc {
   const courts = b.courts ?? 1;
   const snacks = b.snacks ?? [];
   const snacksTotal = b.snacks_total ?? 0;
@@ -1406,6 +1505,22 @@ export function bookingReceipt(b: TurfBooking): ReceiptDoc {
   const grandTotal = bookingGrossTotal(b);
   const taxAmount = grandTotal - taxable;
   const due = Math.max(0, rupees(grandTotal - b.advance_paid));
+  const remainingView = remainingSummary({
+    grandTotal,
+    advances: b.advance_paid
+      ? Math.min(
+          b.advance_paid,
+          receiptAdvanceAmount("turf_booking", b.id, b.advance_paid),
+        )
+      : 0,
+    paid: b.advance_paid,
+    fmt: pmoney,
+    cancelled: /cancel/i.test(String(b.status ?? "")),
+    payments: receiptPaymentRows("turf_booking", b.id),
+    fallbackMode: b.payment_mode,
+    fallbackDate: b.booking_date,
+    fmtDate: formatDMY,
+  });
   const timeText =
     b.start_time && b.end_time ? ` ${b.start_time}-${b.end_time}` : "";
   // Same narrow-roll rationale as billReceipt: abbreviate on thermal paper so
@@ -1479,24 +1594,38 @@ export function bookingReceipt(b: TurfBooking): ReceiptDoc {
           ]
         : []),
       { label: "GRAND TOTAL", value: pmoney(grandTotal), strong: true },
+      ...(remainingView.payableRow ? [remainingView.payableRow] : []),
       { label: "Paid", value: pmoney(b.advance_paid) },
-      ...(due ? [{ label: "Balance due", value: pmoney(due) }] : []),
+      ...remainingView.remainingRows,
       {
         label: "Mode",
         value: receiptModeLabel("turf_booking", b.id, b.payment_mode),
       },
       { label: "Status", value: b.status },
     ],
-    note: b.notes,
+    note: joinNotes(b.notes, remainingView.note),
     balanceDue: due,
     fileName: `${safeFilePart(b.booking_no)}-${safeFilePart(b.customer_name, "customer")}`,
   };
 }
 
-export function snackSaleReceipt(s: SnackSale): ReceiptDoc {
+function snackSaleReceiptRaw(s: SnackSale): ReceiptDoc {
   const taxLines = taxLinesWithFallback(s.total, s);
   const grandTotal = snackSaleGrossTotal(s);
   const taxAmount = grandTotal - rupees(s.total);
+  const snackOnTab = s.payment_mode === "On tab";
+  const remainingView = remainingSummary({
+    grandTotal,
+    advances: 0,
+    paid: snackOnTab ? 0 : grandTotal,
+    fmt: pmoney,
+    cancelled: Boolean(s.cancelled),
+    onTab: snackOnTab,
+    payments: receiptPaymentRows("snack_sale", s.id),
+    fallbackMode: s.payment_mode,
+    fallbackDate: s.sale_date,
+    fmtDate: formatDMY,
+  });
   return {
     kind: "Bill",
     docNo: s.bill_no,
@@ -1531,15 +1660,16 @@ export function snackSaleReceipt(s: SnackSale): ReceiptDoc {
         : s.payment_mode === "On tab"
           ? [
               { label: "Paid", value: pmoney(0) },
-              { label: "Balance due", value: pmoney(grandTotal) },
+              ...remainingView.remainingRows,
               { label: "Status", value: "UNPAID" },
             ]
           : [
               { label: "Paid", value: pmoney(grandTotal) },
+              ...remainingView.remainingRows,
               { label: "Status", value: "PAID" },
             ]),
     ],
-    note: s.notes,
+    note: joinNotes(s.notes, remainingView.note),
     balanceDue: !s.cancelled && s.payment_mode === "On tab" ? grandTotal : 0,
     fileName: `${safeFilePart(s.bill_no)}-snacks`,
   };
@@ -1585,8 +1715,16 @@ export function paymentReceipt(p: {
     totals: [
       { label: "Amount received", value: pmoney(p.amount), strong: true },
       { label: "Mode", value: p.mode },
+      {
+        label: "Balance before this payment",
+        value: pmoney(Math.max(0, p.balanceAfter + p.amount)),
+      },
       { label: "Balance remaining", value: pmoney(p.balanceAfter) },
     ],
+    note:
+      p.balanceAfter > 0
+        ? `Received ${pmoney(p.amount)} via ${p.mode} on ${formatDMY(now.toISOString())}. Remaining ${pmoney(p.balanceAfter)}.`
+        : `Received ${pmoney(p.amount)} via ${p.mode} on ${formatDMY(now.toISOString())}. Remaining ${pmoney(0)} - settled in full.`,
     fileName: `${docNo}-${safeFilePart(p.customer, "customer")}`,
   };
 }

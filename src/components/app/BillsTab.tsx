@@ -38,12 +38,14 @@ import {
 } from "@/lib/biz";
 import {
   useBills,
+  usePayments,
   useDeleteBill,
   useUnmergeBill,
   useUpdateBill,
   useVoidBill,
 } from "@/lib/data";
 import {
+  billCollected,
   billDue,
   billMovedToDues,
   customerOutstandingIndex,
@@ -53,6 +55,8 @@ import { useSnackSales, useTurfBookings } from "@/lib/ops";
 import { TAB_REF_BILL, tabKey, useTabEntries } from "@/lib/tabs";
 import { useSettleBill } from "@/lib/collect";
 import { receiptModeLabel } from "@/lib/payments";
+import { buildPaymentModeLookup } from "@/lib/payment-columns";
+import { readAppSettings } from "@/lib/settings";
 import { dayKey } from "@/lib/analytics";
 import {
   compareBy,
@@ -82,14 +86,14 @@ type BillSortField = "date" | "customer" | "balance" | "total";
 const BILL_SORT_OPTIONS: SortOption<BillSortField>[] = [
   { value: "date", label: "Date", defaultDir: "desc" },
   { value: "customer", label: "Customer", defaultDir: "asc" },
-  { value: "balance", label: "Balance due", defaultDir: "desc" },
+  { value: "balance", label: "Remaining to be paid", defaultDir: "desc" },
   { value: "total", label: "Total", defaultDir: "desc" },
 ];
 
 type LedgerSortField = "due" | "name" | "date";
 
 const LEDGER_SORT_OPTIONS: SortOption<LedgerSortField>[] = [
-  { value: "due", label: "Balance due", defaultDir: "desc" },
+  { value: "due", label: "Remaining to be paid", defaultDir: "desc" },
   { value: "name", label: "Name (A–Z)", defaultDir: "asc" },
   { value: "date", label: "Most recent bill", defaultDir: "desc" },
 ];
@@ -102,6 +106,7 @@ export function BillsTab() {
   const unmergeBillMut = useUnmergeBill();
   const voidBillMut = useVoidBill();
   const { data: tabEntries = [] } = useTabEntries();
+  const { data: payments = [] } = usePayments();
   const { data: allBookings = [] } = useTurfBookings();
   const { data: allSales = [] } = useSnackSales();
 
@@ -255,6 +260,25 @@ export function BillsTab() {
     balanceOf(b) > 0 &&
     (Date.now() - new Date(b.bill_date).getTime()) / 86400000 > OVERDUE_DAYS;
 
+  // Cash / Online / split columns for the Excel exports — the same payment
+  // rows the Dashboard split uses. A merged bill carries its sources' real
+  // split (merge copies their payment rows onto the bill).
+  const billModes = useMemo(() => {
+    const settings = readAppSettings();
+    return buildPaymentModeLookup(
+      "bill",
+      bills
+        .filter((b) => b.status !== "cancelled")
+        .map((b) => ({
+          id: b.id,
+          collected: billCollected(b, settings),
+          mode: b.payment_mode ?? null,
+          date: b.bill_date,
+        })),
+      payments,
+    );
+  }, [bills, payments]);
+
   const billsToRows = (list: Bill[]) =>
     list.map((b) => ({
       Invoice: b.invoice_no,
@@ -265,6 +289,7 @@ export function BillsTab() {
       Paid: billPaidAmount(b),
       Balance: balanceOf(b),
       Status: b.status,
+      ...billModes(b.id),
     }));
 
   const bulkMarkPaid = async () => {
@@ -467,6 +492,7 @@ export function BillsTab() {
                             Paid: billPaidAmount(b),
                             Balance: balanceOf(b),
                             Status: b.status,
+                            ...billModes(b.id),
                           })),
                           `bills-${sortSuffix(sort.field, sort.dir)}`,
                           "Bills",

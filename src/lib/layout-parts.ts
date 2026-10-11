@@ -74,7 +74,7 @@ export const SECTION_PARTS: Record<string, PartDef[]> = {
     p("turf.new-booking.extras", "Discount & notes", "action"),
     p("turf.new-booking.grand-total", "Grand total (auto)", "summary", true),
     p("turf.new-booking.advance", "Advance paid"),
-    p("turf.new-booking.balance", "Balance due (auto)", "summary"),
+    p("turf.new-booking.balance", "Remaining to be paid (auto)", "summary"),
     p("turf.new-booking.payment-mode", "Payment mode"),
     p("turf.new-booking.status", "Status"),
     p("turf.new-booking.repeat", "Repeat weekly"),
@@ -88,6 +88,14 @@ export const SECTION_PARTS: Record<string, PartDef[]> = {
   "turf.pending-dues": [
     p("turf.pending-dues.heading", "Heading & total", "summary"),
     p("turf.pending-dues.list", "Dues list", "list", true),
+    p("turf.pending-dues.pay-cash", "Dues card: Paid · Cash button", "action"),
+    p("turf.pending-dues.pay-upi", "Dues card: Paid · UPI button", "action"),
+    p(
+      "turf.pending-dues.pay-split",
+      "Dues card: Split cash + online",
+      "action",
+    ),
+    p("turf.pending-dues.pay-part", "Dues card: Part payment box", "action"),
   ],
   "turf.bookings": [
     p("turf.bookings.heading", "Heading", "summary"),
@@ -357,7 +365,11 @@ export const SURFACE_REGISTRY: SurfaceDef[] = [
         "summary",
         true,
       ),
-      p("surface.turf-pay-confirm.due-after", "Due after this payment", "summary"),
+      p(
+        "surface.turf-pay-confirm.due-after",
+        "Due after this payment",
+        "summary",
+      ),
       p("surface.turf-pay-confirm.actions", "Cancel & confirm", "action", true),
     ],
   },
