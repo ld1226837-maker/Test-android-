@@ -2,9 +2,10 @@ import { useState } from "react";
 import { Copy, Download, Eye, Printer, QrCode, Share2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { billText, copyText, whatsappUrl, type Bill } from "@/lib/biz";
+import { copyText, whatsappUrl, type Bill } from "@/lib/biz";
 import {
   billReceipt,
+  billShareText,
   downloadBillPdf,
   printBillPdf,
   shareBillPdf,
@@ -109,7 +110,10 @@ export function BillActions({
             try {
               const res = await shareBillPdf(
                 bill,
-                whatsappUrl(billText(bill), bill.customer_phone),
+                whatsappUrl(
+                  billShareText(bill, "whatsapp"),
+                  bill.customer_phone,
+                ),
                 section,
               );
               if (res === "fallback")
@@ -133,7 +137,7 @@ export function BillActions({
           title="Copy"
           disabled={restricted}
           onClick={async () => {
-            const ok = await copyText(billText(bill));
+            const ok = await copyText(billShareText(bill));
             if (ok) toast.success("Bill copied");
             else toast.error("Copy failed");
           }}
