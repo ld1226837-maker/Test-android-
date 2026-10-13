@@ -195,7 +195,7 @@ describe("export helpers", () => {
     const byBooking = groupBookingPayments(rows);
     const sheet = turfPaymentsSheetRows([b], byBooking);
     const cols = turfBookingExportColumns(b, rows);
-    const sheetTotal = sheet.reduce((s, r) => s + Number(r.Amount), 0);
+    const sheetTotal = sheet.reduce((s, r) => s + Number(r["Amount"]), 0);
     expect(sheetTotal).toBe(
       Number(cols["Total collected - Cash"]) +
         Number(cols["Total collected - Online"]),
@@ -243,8 +243,27 @@ describe("cancelled / no-show bookings match analytics", () => {
     const b = booking({ advance_paid: 300, merged_into_bill_id: "bill1" });
     const rows = [pay(300, "Cash", "2026-09-01T10:00:00.000Z")];
     const cols = turfBookingExportColumns(b, rows);
+    // numbers stay 0 (its money is on the bill) — no double count...
     expect(cols["Total collected - Cash"]).toBe(0);
-    expect(cols["Payment split"]).toBe("n/a");
+    expect(cols["Total collected - Online"]).toBe(0);
+    // ...but the text still says how it was paid
+    expect(cols["Payment split"]).toBe("Cash only (paid on merged bill)");
+    expect(cols["Advance split"]).toContain("Cash");
+  });
+
+  it("a merged booking paid as a split still reports its split text", () => {
+    const b = booking({ advance_paid: 1000, merged_into_bill_id: "bill1" });
+    const rows = [
+      pay(600, "Cash", "2026-09-01T10:00:00.000Z"),
+      pay(400, "UPI", "2026-09-01T10:00:00.001Z"),
+    ];
+    const cols = turfBookingExportColumns(b, rows);
+    expect(cols["Total collected - Cash"]).toBe(0);
+    expect(cols["Total collected - Online"]).toBe(0);
+    expect(cols["Payment split"]).toBe(
+      "Split (Cash + Online) (paid on merged bill)",
+    );
+    expect(cols["Advance split"]).toContain("UPI");
   });
 });
 
@@ -267,7 +286,48 @@ describe("full payment in one collection", () => {
       pay(600, "UPI", "2026-09-03T10:00:00.000Z", "2026-09-03"),
     ];
     const sheet = turfPaymentsSheetRows([b], groupBookingPayments(rows));
-    expect(sheet.map((r) => r["Payment stage"])).toEqual(["Advance", "Remaining"]);
+    expect(sheet.map((r) => r["Payment stage"])).toEqual([
+      "Advance",
+      "Remaining",
+    ]);
   });
 });
 
+describe("advance and balance are exported separately", () => {
+  it("Advance and Balance get their own Cash / Online and split columns", () => {
+    const b = booking({ advance_paid: 3100 });
+    const rows = [
+      pay(300, "Cash", "2026-09-01T10:00:00.000Z"),
+      pay(200, "UPI", "2026-09-01T10:00:00.001Z"),
+      pay(1755, "Cash", "2026-09-01T14:00:00.000Z"),
+      pay(845, "UPI", "2026-09-01T14:00:00.001Z"),
+    ];
+    const cols = turfBookingExportColumns(b, rows);
+    expect(cols["Advance - Cash"]).toBe(300);
+    expect(cols["Advance - Online"]).toBe(200);
+    expect(cols["Advance split"]).toBe("Cash \u20b9300 + UPI \u20b9200");
+    expect(cols["Remaining collected - Cash"]).toBe(1755);
+    expect(cols["Remaining collected - Online"]).toBe(845);
+    expect(cols["Balance split"]).toBe("Cash \u20b91,755 + UPI \u20b9845");
+    // never one combined Cash 2,055 + UPI 1,045 text
+    expect(cols["Split detail"]).toBeUndefined();
+    expect(JSON.stringify(cols)).not.toContain("2,055");
+  });
+
+  it("the Turf payments sheet keeps one line per payment, tagged Advance / Remaining", () => {
+    const b = booking({ advance_paid: 3100 });
+    const rows = [
+      pay(300, "Cash", "2026-09-01T10:00:00.000Z"),
+      pay(200, "UPI", "2026-09-01T10:00:00.001Z"),
+      pay(1755, "Cash", "2026-09-01T14:00:00.000Z"),
+      pay(845, "UPI", "2026-09-01T14:00:00.001Z"),
+    ];
+    const out = turfPaymentsSheetRows([b], new Map([[b.id, rows]]));
+    expect(out.map((r) => r["Payment stage"])).toEqual([
+      "Advance",
+      "Advance",
+      "Remaining",
+      "Remaining",
+    ]);
+  });
+});

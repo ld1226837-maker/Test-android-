@@ -37,6 +37,14 @@ describe("layout registry covers what the tabs render", () => {
     expect(partIds.has("money.add-expense.payment-mode")).toBe(true);
     expect(partIds.has("investments.summary.list")).toBe(true);
     expect(partIds.has("investments.summary.total")).toBe(true);
+    // Owner WhatsApp card: recent-bills dropdown, sort bar and sender.
+    for (const id of [
+      "settings.whatsapp.owner-number",
+      "settings.whatsapp.daily-summary",
+      "settings.whatsapp.recent-sort",
+      "settings.whatsapp.recent-bills",
+    ])
+      expect(partIds.has(id)).toBe(true);
   });
   it("every pop-up surface that renders parts is registered, with all its parts", () => {
     const surfaces = new Map(
@@ -157,6 +165,17 @@ describe("layout registry covers what the tabs render", () => {
       ]) {
         expect(partIds.has(id)).toBe(true);
         // wired in QuickPayRow.tsx (ids are passed to its <Slot>)
+        expect(SRC.includes(`"${id}"`)).toBe(true);
+      }
+    });
+    it("the same four buttons are parts of turf.pending-dues", () => {
+      for (const id of [
+        "turf.pending-dues.pay-cash",
+        "turf.pending-dues.pay-upi",
+        "turf.pending-dues.pay-split",
+        "turf.pending-dues.pay-part",
+      ]) {
+        expect(partIds.has(id)).toBe(true);
         expect(SRC.includes(`"${id}"`)).toBe(true);
       }
     });

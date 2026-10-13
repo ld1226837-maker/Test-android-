@@ -30,15 +30,10 @@ import { normalizeReceivedPaymentMode } from "./payments";
 const BATCH_MS = 1000;
 
 export type TurfBookingKind =
-  | "Turf only"
-  | "Turf + snacks"
-  | "Merged into bill";
+  "Turf only" | "Turf + snacks" | "Merged into bill";
 
 export type RemainingStatus =
-  | "Remaining paid"
-  | "Part paid"
-  | "Not paid"
-  | "n/a";
+  "Remaining paid" | "Part paid" | "Not paid" | "n/a";
 
 export type PaymentSplitLabel =
   | "Cash only"
@@ -78,6 +73,13 @@ export type TurfPaymentBreakdown = {
   splitDetail: string;
   /** Two or more different modes were used on this booking. */
   splitUsed: boolean;
+  /** Advance (first collection) on its own: Cash / Online amounts and the
+   * per-mode text, never mixed with the balance. */
+  advanceCash: number;
+  advanceOnline: number;
+  advanceSplit: string;
+  /** Balance (every later collection) on its own, same shape. */
+  balanceSplit: string;
   kind: TurfBookingKind;
   /** "Advance ₹500 · Remaining paid ₹700 (...) on 12 Oct" style text, or "". */
   note: string;
@@ -153,6 +155,9 @@ export function bookingPaymentBreakdown(
   b: TurfBooking,
   rows: PaymentRow[],
   tabEntries: TabEntry[] = [],
+  /** Informational only: count a merged booking's own payments (normally 0,
+   * its money being on the bill) so the sheet can still say HOW it was paid. */
+  includeMerged = false,
 ): TurfPaymentBreakdown {
   const financial = isFinancialBooking(b);
   // Money that actually arrived. A cancelled / no-show booking is not
@@ -164,7 +169,9 @@ export function bookingPaymentBreakdown(
   const collected = financial
     ? bookingCashCollected(b, tabEntries)
     : b.merged_into_bill_id
-      ? 0
+      ? includeMerged
+        ? rupees(bookingCashCollected(b, tabEntries))
+        : 0
       : rupees(
           bookingForfeitedRevenue(b, tabEntries) +
             bookingRefundableAdvance(b, tabEntries),
@@ -260,6 +267,11 @@ export function bookingPaymentBreakdown(
   const onlineOf = (xs: TurfPaymentLine[]) =>
     sum(xs.filter((l) => isOnlinePaymentMode(l.mode)));
 
+  const stageSplit = (xs: TurfPaymentLine[]) =>
+    [...modeSummary(xs)]
+      .map(([mode, amt]) => `${mode} ${money(amt)}`)
+      .join(" + ");
+
   const remainingLastDate = remainingLines.reduce(
     (latest, l) => (l.receivedAt > latest ? l.receivedAt : latest),
     "",
@@ -309,6 +321,10 @@ export function bookingPaymentBreakdown(
     splitLabel: splitLabelFor(lines),
     splitDetail,
     splitUsed: byMode.size > 1,
+    advanceCash: cashOf(advanceLines),
+    advanceOnline: onlineOf(advanceLines),
+    advanceSplit: stageSplit(advanceLines),
+    balanceSplit: stageSplit(remainingLines),
     kind: turfBookingKind(b),
     note,
   };
@@ -317,6 +333,8 @@ export function bookingPaymentBreakdown(
 /** Money columns added by turfBookingExportColumns (for `moneyColumns`). */
 export const TURF_EXPORT_MONEY_COLUMNS = [
   "Advance (first payment)",
+  "Advance - Cash",
+  "Advance - Online",
   "Remaining collected",
   "Remaining collected - Cash",
   "Remaining collected - Online",
@@ -337,9 +355,24 @@ export function turfBookingExportColumns(
 ): Record<string, string | number> {
   const bp = bookingPaymentBreakdown(b, rows, tabEntries);
   const merged = !!b.merged_into_bill_id;
+  // The numbers stay 0 for a merged booking (its money is on the bill); the
+  // text columns still say how it was paid.
+  const info = merged ? bookingPaymentBreakdown(b, rows, tabEntries, true) : bp;
+  const isFull = info.lines.some((l) => l.stage === "Full payment");
   return {
     "Booking type": bp.kind,
-    "Advance (first payment)": bp.advance,
+    // Only a real advance: a booking paid in ONE collection (nothing taken up
+    // front) reports 0 here; its money is in "Total paid so far" and the
+    // Total collected columns.
+    "Advance (first payment)": bp.lines.some((l) => l.stage === "Full payment")
+      ? 0
+      : bp.advance,
+    "Advance - Cash": bp.lines.some((l) => l.stage === "Full payment")
+      ? 0
+      : bp.advanceCash,
+    "Advance - Online": bp.lines.some((l) => l.stage === "Full payment")
+      ? 0
+      : bp.advanceOnline,
     "Remaining collected": bp.remaining,
     "Remaining collected - Cash": bp.remainingCash,
     "Remaining collected - Online": bp.remainingOnline,
@@ -349,8 +382,16 @@ export function turfBookingExportColumns(
     "Remaining status": bp.status,
     "Total collected - Cash": bp.totalCash,
     "Total collected - Online": bp.totalOnline,
-    "Payment split": merged ? "n/a" : bp.splitLabel,
-    "Split detail": bp.splitDetail,
+    "Payment split": merged
+      ? info.splitLabel === "Unpaid"
+        ? "n/a"
+        : `${info.splitLabel} (paid on merged bill)`
+      : bp.splitLabel,
+    // Advance and balance are kept on separate columns (never one combined
+    // "Cash + UPI" total). A booking paid in one collection has no balance.
+    "Advance split": isFull ? "" : info.advanceSplit,
+    "Balance split": info.balanceSplit,
+    "Full payment split": isFull ? info.advanceSplit : "",
     "Split pay used": bp.splitUsed ? "Yes" : "No",
   };
 }
@@ -363,7 +404,11 @@ export function turfPaymentsSheetRows(
 ): Record<string, string | number>[] {
   const out: Record<string, string | number>[] = [];
   for (const b of bookings) {
-    const bp = bookingPaymentBreakdown(b, byBooking.get(b.id) ?? [], tabEntries);
+    const bp = bookingPaymentBreakdown(
+      b,
+      byBooking.get(b.id) ?? [],
+      tabEntries,
+    );
     for (const l of bp.lines) {
       out.push({
         "Booking ID": b.booking_no,
