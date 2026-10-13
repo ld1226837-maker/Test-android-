@@ -1,3 +1,4 @@
+import { isCancelled } from "./record-state";
 import { jsPDF } from "jspdf";
 import { courtsLabel, storedTurfAmount } from "@/lib/courts";
 import { toast } from "sonner";
@@ -82,7 +83,15 @@ export type ReceiptLine = {
    * place of `amount` when set. */
   amountText?: string;
 };
-export type ReceiptTotal = { label: string; value: string; strong?: boolean };
+export type ReceiptTotal = {
+  label: string;
+  value: string;
+  strong?: boolean;
+  /** Printed in a smaller, muted size (e.g. the Paid line under the total). */
+  small?: boolean;
+  /** Kept for the copy / WhatsApp text, but not printed on the bill. */
+  printHide?: boolean;
+};
 
 export type ReceiptDoc = {
   kind: string;
@@ -285,9 +294,9 @@ export function buildReceiptPdf(
       pdf.text(fitToWidth(text, width - marginX * 2), marginX, y);
       y += lineH - 0.6;
     };
-    const row = (l: string, r: string, bold = false) => {
+    const row = (l: string, r: string, bold = false, small = false) => {
       pdf.setFont("helvetica", bold ? "bold" : "normal");
-      pdf.setFontSize(bodyFont * scale);
+      pdf.setFontSize(bodyFont * scale * (small ? 0.8 : 1));
       // A long label (e.g. a custom tax name) could otherwise run straight
       // into the right-aligned value — clamp it to whatever room is actually
       // left once the value's own width is measured, same guard itemRow()
@@ -805,11 +814,12 @@ export function buildReceiptPdf(
       rule();
       // Status reads in capitals on every document type (bills store it in
       // lower case, bookings in title case), matching the premium badge.
-      for (const t of doc.totals)
+      for (const t of doc.totals.filter((x) => !x.printHide))
         row(
           t.label,
           t.label === "Status" ? t.value.toUpperCase() : t.value,
           t.strong,
+          t.small,
         );
     }
     if (doc.note) {
@@ -1360,7 +1370,7 @@ function billReceiptRaw(bill: Bill): ReceiptDoc {
         : 0,
     paid,
     fmt: pmoney,
-    cancelled: bill.status === "cancelled",
+    cancelled: isCancelled(bill),
     payments: receiptPaymentRows("bill", bill.id),
     fallbackMode: bill.payment_mode,
     fallbackDate: bill.bill_date,
@@ -1454,6 +1464,17 @@ function billReceiptRaw(bill: Bill): ReceiptDoc {
                 },
               ]
             : []),
+          ...(remainingView.balancePaid > 0
+            ? [
+                {
+                  label: "Balance paid",
+                  ...(remainingView.balanceModeText
+                    ? { sub: remainingView.balanceModeText }
+                    : {}),
+                  amount: -remainingView.balancePaid,
+                },
+              ]
+            : []),
         ],
     totals: [
       { label: "Subtotal", value: pmoney(bill.subtotal) },
@@ -1484,8 +1505,22 @@ function billReceiptRaw(bill: Bill): ReceiptDoc {
       ...remainingView.remainingRows,
       // Merged bill: how the collected money arrived — Cash, Online and the
       // split — plus the turf and per-snack-bill parts.
-      ...(showReceived ? modeLines(received, pmoney) : []),
-      ...(showReceived && turfPaid.total > 0
+      // When the turf money came in two stages, the advance and the balance
+      // print on their own lines above, so the combined "Split payment"
+      // amounts row (advance + balance + snacks added together) is left out.
+      ...(showReceived
+        ? modeLines(received, pmoney).filter(
+            (l) =>
+              !(
+                merged &&
+                merged.turfBalancePaid > 0 &&
+                l.label === "Split payment"
+              ),
+          )
+        : []),
+      ...(showReceived &&
+      turfPaid.total > 0 &&
+      !(merged && merged.turfBalancePaid > 0)
         ? [{ label: "Turf paid", value: turfPaid.detail }]
         : []),
       ...(showReceived
@@ -1501,7 +1536,28 @@ function billReceiptRaw(bill: Bill): ReceiptDoc {
               : [];
           })
         : []),
-      ...(modeValue ? [{ label: "Mode", value: modeValue }] : []),
+      ...(!merged && remainingView.balancePaid > 0
+        ? [
+            ...(remainingView.advanceModeText
+              ? [
+                  {
+                    label: "Advance mode",
+                    value: remainingView.advanceModeText,
+                  },
+                ]
+              : []),
+            ...(remainingView.balanceModeText
+              ? [
+                  {
+                    label: "Balance mode",
+                    value: remainingView.balanceModeText,
+                  },
+                ]
+              : []),
+          ]
+        : modeValue
+          ? [{ label: "Mode", value: modeValue }]
+          : []),
       { label: "Status", value: bill.status.toUpperCase() },
     ],
     note: remainingView.note,
@@ -1640,10 +1696,15 @@ function bookingReceiptRaw(b: TurfBooking): ReceiptDoc {
     lines: [
       {
         label: `${b.slot_name} slot${timeText}`,
-        sub: courtText
-          ? `${durationText(b.hours)} · ${courtText}`
-          : durationText(b.hours),
-        qty: wide ? `${courts} court${courts > 1 ? "s" : ""}` : `${courts} crt`,
+        // Duration lives in the QTY column (e.g. "3 hr"); the sub-line only
+        // carries the court name(s), or the court count when several courts
+        // are held and the venue has no named courts.
+        ...(courtText
+          ? { sub: courtText }
+          : courts > 1
+            ? { sub: `${courts} courts` }
+            : {}),
+        qty: durationText(b.hours),
         amount: turfAmount,
       },
       ...snacks.map((it) => ({
@@ -1673,6 +1734,17 @@ function bookingReceiptRaw(b: TurfBooking): ReceiptDoc {
               ),
             },
           ]
+        : []), // The balance collected later is its own line, with its own split.
+      ...(remainingView.balancePaid > 0
+        ? [
+            {
+              label: "Balance paid",
+              ...(remainingView.balanceModeText
+                ? { sub: remainingView.balanceModeText }
+                : {}),
+              amount: -remainingView.balancePaid,
+            },
+          ]
         : []),
     ],
     totals: [
@@ -1691,16 +1763,56 @@ function bookingReceiptRaw(b: TurfBooking): ReceiptDoc {
           ]
         : []),
       { label: "GRAND TOTAL", value: pmoney(grandTotal), strong: true },
-      ...(remainingView.payableRow ? [remainingView.payableRow] : []),
-      ...(remainingView.balanceRow ? [remainingView.balanceRow] : []),
-      { label: "Paid", value: pmoney(b.advance_paid) },
-      ...remainingView.remainingRows,
+      ...(remainingView.payableRow
+        ? [{ ...remainingView.payableRow, printHide: true }]
+        : []),
+      ...(remainingView.balanceRow
+        ? [{ ...remainingView.balanceRow, printHide: true }]
+        : []),
+      // Only a small "Paid" line stays under the total on the printed bill;
+      // payable / balance / mode rows are hidden from print (copy text keeps
+      // them) and an unsettled balance is still printed.
       {
-        label: "Mode",
-        value:
-          remainingView.modeLabel ??
-          receiptModeLabel("turf_booking", b.id, b.payment_mode),
+        label: "Paid",
+        value: pmoney(b.advance_paid),
+        small: true,
+        printHide: true,
       },
+      ...remainingView.remainingRows.map((r) =>
+        due > 0 ? r : { ...r, printHide: true },
+      ),
+      // Advance and balance each get their own Mode line (never one
+      // combined Cash + UPI total across both).
+      ...(remainingView.balancePaid > 0
+        ? [
+            ...(remainingView.advanceModeText
+              ? [
+                  {
+                    label: "Advance mode",
+                    value: remainingView.advanceModeText,
+                    printHide: true,
+                  },
+                ]
+              : []),
+            ...(remainingView.balanceModeText
+              ? [
+                  {
+                    label: "Balance mode",
+                    value: remainingView.balanceModeText,
+                    printHide: true,
+                  },
+                ]
+              : []),
+          ]
+        : [
+            {
+              label: "Mode",
+              printHide: true,
+              value:
+                remainingView.modeLabel ??
+                receiptModeLabel("turf_booking", b.id, b.payment_mode),
+            },
+          ]),
       { label: "Status", value: b.status },
     ],
     note: joinNotes(b.notes, remainingView.note),
@@ -1731,7 +1843,7 @@ function snackSaleReceiptRaw(s: SnackSale): ReceiptDoc {
     advances: 0,
     paid: snackOnTab ? 0 : grandTotal,
     fmt: pmoney,
-    cancelled: Boolean(s.cancelled),
+    cancelled: isCancelled(s),
     onTab: snackOnTab,
     payments: receiptPaymentRows("snack_sale", s.id),
     fallbackMode: s.payment_mode,
@@ -1767,7 +1879,7 @@ function snackSaleReceiptRaw(s: SnackSale): ReceiptDoc {
       ...(s.booking_no
         ? [{ label: "Linked booking", value: s.booking_no }]
         : []),
-      ...(s.cancelled
+      ...(isCancelled(s)
         ? [{ label: "Status", value: "CANCELLED" }]
         : s.payment_mode === "On tab"
           ? [
@@ -1782,7 +1894,7 @@ function snackSaleReceiptRaw(s: SnackSale): ReceiptDoc {
             ]),
     ],
     note: joinNotes(s.notes, remainingView.note),
-    balanceDue: !s.cancelled && s.payment_mode === "On tab" ? grandTotal : 0,
+    balanceDue: !isCancelled(s) && s.payment_mode === "On tab" ? grandTotal : 0,
     fileName: `${safeFilePart(s.bill_no)}-snacks`,
   };
 }
