@@ -341,4 +341,37 @@ describe("overnight occupancy", () => {
     expect(occupied.get(1440)?.has("c1")).toBe(true);
     expect(freeCourtIdsFor(occupied, 1, 1380, 120)).toEqual([]);
   });
+  it("a 5 AM–7 AM booking (date D) blocks D's 5–6 AM and the NEXT date's 6–7 AM, in both directions", () => {
+    const early = {
+      id: "early",
+      booking_date: "2026-10-10",
+      start_time: "5 AM",
+      end_time: "7 AM",
+      hours: 2,
+      courts: 1,
+      court_ids: ["c1"],
+    };
+    // Seen from date D: it sits at business minutes 1740 … 1860.
+    const onD = buildCourtOccupancy([early], "2026-10-10", 1);
+    expect(onD.get(1740)?.has("c1")).toBe(true);
+    expect(onD.get(1859)?.has("c1")).toBe(true);
+    expect(onD.get(1860)).toBeUndefined();
+    // Seen from D+1: its 6–7 AM spill blocks that morning's first hour only.
+    const onNext = buildCourtOccupancy([early], "2026-10-11", 1);
+    expect(freeCourtIdsFor(onNext, 1, H(6), 60)).toEqual([]);
+    expect(freeCourtIdsFor(onNext, 1, H(7), 60)).toEqual(["c1"]);
+    // And a 6–7 AM booking made on D+1 shows up on D at keys 1800 … 1860.
+    const morning = {
+      id: "morning",
+      booking_date: "2026-10-11",
+      start_time: "6 AM",
+      end_time: "7 AM",
+      hours: 1,
+      courts: 1,
+      court_ids: ["c1"],
+    };
+    const seenFromD = buildCourtOccupancy([morning], "2026-10-10", 1);
+    expect(freeCourtIdsFor(seenFromD, 1, 1740, 60)).toEqual(["c1"]); // 5–6 AM free
+    expect(freeCourtIdsFor(seenFromD, 1, 1740, 120)).toEqual([]); // 5–7 AM clashes
+  });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canEndAt,
+  DAY_END,
   MAX_END,
   MIDNIGHT,
   nextSelection,
@@ -72,7 +73,7 @@ describe("B. midnight (24:00)", () => {
     expect(canEndAt([], MIDNIGHT, 60, set())).toBe(false);
     expect(taps([MIDNIGHT], 60, set())).toEqual([MIDNIGHT]);
     expect(taps([0], 60, set())).toEqual([]); // clock 12 AM, not a business minute
-    expect(taps([MAX_END], 60, set())).toEqual([]); // 6 AM next morning ends the day
+    expect(taps([DAY_END], 60, set())).toEqual([]); // 6 AM next morning can't START a booking
   });
   it("B5 11 PM–12 AM booked: 10 PM allowed", () =>
     expect(taps([H(22)], 60, set(H(23)))).toEqual([H(22)]));
@@ -145,7 +146,7 @@ describe("D. day-part boundaries", () => {
     expect(nextSelection(one, H(22), 60, b)).toBe(one);
   });
   it("D4 Late Night: 12 AM then 6 AM -> 12–6 AM, saved under the PREVIOUS date's night", () => {
-    const sel = taps([MIDNIGHT, MAX_END], 60, set());
+    const sel = taps([MIDNIGHT, DAY_END], 60, set());
     expect(sel).toEqual([1440, 1500, 1560, 1620, 1680, 1740]);
     expect(minuteLabel(sel[0]!)).toBe("12 AM");
     expect(minuteLabel(sel[sel.length - 1]! + 60)).toBe("6 AM");
@@ -171,9 +172,47 @@ describe("overnight (owner's patch: end up to 6 AM next day)", () => {
     // ending exactly at 12 AM is still fine (half-open)
     expect(canEndAt(one, MIDNIGHT, 60, b)).toBe(true);
   });
-  it("cannot run past 6 AM next day", () => {
+  it("may run past the 6 AM seam, but never past 9 AM next day", () => {
+    expect(canEndAt([H(23)], DAY_END, 60, set())).toBe(true);
+    expect(canEndAt([H(23)], DAY_END + 60, 60, set())).toBe(true);
     expect(canEndAt([H(23)], MAX_END, 60, set())).toBe(true);
     expect(canEndAt([H(23)], MAX_END + 60, 60, set())).toBe(false);
+  });
+});
+
+describe("early morning across the 6 AM seam (5 AM–7 AM)", () => {
+  const FIVE = 1440 + H(5); // 5 AM next morning, business minutes
+  const SIX = DAY_END;
+  const SEVEN = DAY_END + 60;
+  it("5 AM then 7 AM -> [5 AM, 6 AM], labelled 5 AM – 7 AM, 2 hr", () => {
+    const sel = taps([FIVE, SEVEN], 60, set());
+    expect(sel).toEqual([FIVE, SIX]);
+    expect(minuteLabel(sel[0]!)).toBe("5 AM");
+    expect(minuteLabel(sel[sel.length - 1]! + 60)).toBe("7 AM");
+    expect((sel.length * 60) / 60).toBe(2);
+  });
+  it("30-min grid: 5:30 AM then 7 AM -> three slots (1.5 hr)", () => {
+    const sel = taps([FIVE + 30, SEVEN], 30, set());
+    expect(sel).toEqual([FIVE + 30, SIX, SIX + 30]);
+  });
+  it("6 AM next morning still can't START a booking", () => {
+    expect(taps([SIX], 60, set())).toEqual([]);
+    expect(taps([SEVEN], 60, set())).toEqual([]);
+  });
+  it("a booked 6 AM slot (next date's morning) blocks 5 AM–7 AM but not 5 AM–6 AM", () => {
+    const b = set(SIX);
+    const one = taps([FIVE], 60, b);
+    expect(nextSelection(one, SEVEN, 60, b)).toBe(one);
+    expect(taps([FIVE, SIX], 60, b)).toEqual([FIVE]);
+  });
+  it("a booked 7 AM slot can still be the (exclusive) end of 5 AM–7 AM", () => {
+    const b = set(SEVEN);
+    expect(taps([FIVE, SEVEN], 60, b)).toEqual([FIVE, SIX]);
+  });
+  it("editing restores 5 AM–7 AM: slotsForSpan + spanFromTimes round-trip", () => {
+    const span = spanFromTimes(parseMinutes("5 AM"), parseMinutes("7 AM"), 2);
+    expect(span).toBe(120);
+    expect(slotsForSpan(FIVE, span, 60)).toEqual([FIVE, SIX]);
   });
 });
 
@@ -182,7 +221,7 @@ describe("G. regression guards", () => {
     for (const iv of SLOT_INTERVALS) {
       const booked = set(H(10), H(19), H(21), H(23), MIDNIGHT, MIDNIGHT + 60);
       const starts = [] as number[];
-      for (let m = 360; m < MAX_END; m += iv) starts.push(m);
+      for (let m = 360; m < DAY_END; m += iv) starts.push(m);
       const ends = [
         ...starts,
         ...Array.from({ length: 1440 / iv + 1 }, (_, i) => 360 + i * iv),

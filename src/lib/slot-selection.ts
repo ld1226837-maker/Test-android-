@@ -8,6 +8,8 @@
  *    8 PM after 6 PM selects 6–8 PM, never the 8 PM slot itself.
  *  - Minutes are BUSINESS-DAY minutes: the turf's day runs 6 AM -> 6 AM, so
  *    360 = 6 AM, 1440 = 12 AM, 1500 = 1 AM and 1800 = 6 AM the next morning.
+ *    A booking starts inside that day but may END up to 9 AM next morning
+ *    (1980), so 5 AM–7 AM (1740 → 1860) is a single booking.
  *    The 12-6 AM slots after a night belong to the PREVIOUS date (a 2 AM
  *    booking made for Saturday night is stored under Saturday).
  *  - Intervals are half-open `[start, end)`: a booking ending at 8 PM does
@@ -17,14 +19,25 @@
  *    as an END, because an end is exclusive.
  */
 
-import { BUSINESS_DAY_END, BUSINESS_DAY_START } from "@/lib/time-slot-utils";
+import {
+  BOOKING_MAX_END,
+  BUSINESS_DAY_END,
+  BUSINESS_DAY_START,
+} from "@/lib/time-slot-utils";
 
 /** 12 AM (the turn of the calendar day) in business-day minutes. */
 export const MIDNIGHT = 1440;
 /** Earliest start of a booking: 6 AM. */
 export const MIN_START = BUSINESS_DAY_START;
-/** Latest end of a booking: 6 AM the next morning (end of Late Night). */
-export const MAX_END = BUSINESS_DAY_END;
+/** First minute that can no longer START a booking: 6 AM the next morning. */
+export const DAY_END = BUSINESS_DAY_END;
+/**
+ * Latest end of a booking: 9 AM the next morning. A booking must START before
+ * `DAY_END` but may run on past the 6 AM seam (e.g. 5 AM–7 AM).
+ */
+export const MAX_END = BOOKING_MAX_END;
+/** One booking never covers more than 24 hours. */
+export const MAX_SPAN = 1440;
 
 /** Slot start minutes covering [start, end) on the `interval` grid. */
 export const slotsBetween = (
@@ -51,6 +64,7 @@ export function canEndAt(
   if (selected.length === 0) return false;
   const start = Math.min(...selected);
   if (start < MIN_START || end <= start || end > MAX_END) return false;
+  if (end - start > MAX_SPAN) return false;
   if ((end - start) % interval !== 0) return false;
   const isBooked = (m: number) =>
     Array.isArray(booked)
@@ -70,7 +84,8 @@ export function canEndAt(
  *    `end_time === minuteLabel(last + interval)` always hold.
  *  - Nothing selected: the tap starts a booking. A booked slot, or a minute
  *    outside the business day (before 6 AM / at 6 AM next morning), can never
- *    be a start. 12 AM is a normal slot — the first of Late Night.
+ *    be a start (it CAN be an end: a booking may run up to `MAX_END`). 12 AM
+ *    is a normal slot — the first of Late Night.
  *  - Otherwise the tap is the END boundary, accepted only via `canEndAt`.
  *    Tapping before the start re-aims a lone start (two-point range) or, with
  *    several slots selected, restarts at the tapped slot.
@@ -92,7 +107,7 @@ export function nextSelection(
     return sorted.filter((x) => x < tapped);
   }
 
-  const canStart = (m: number) => m >= MIN_START && m < MAX_END && !isBooked(m);
+  const canStart = (m: number) => m >= MIN_START && m < DAY_END && !isBooked(m);
 
   if (prev.length === 0) return canStart(tapped) ? [tapped] : prevArr;
 

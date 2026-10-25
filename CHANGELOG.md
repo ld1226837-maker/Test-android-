@@ -4,6 +4,19 @@ All notable changes to this consolidation are recorded here, newest first.
 
 ## [Unreleased]
 
+### Fixed
+
+- **5 AM–7 AM (any booking that runs past 6 AM) can now be booked.** The turf's
+  business day is 6 AM → 6 AM and a booking used to be capped at the 6 AM seam,
+  so a start in Late Night (e.g. 5 AM) could never end at 7 AM. A booking still
+  STARTS inside its own business day but may now END up to 9 AM the next
+  morning (`BOOKING_MAX_END` in `time-slot-utils.ts`; `DAY_END` stays 6 AM as the
+  latest START). The Late Night tab shows "End at" buttons for 6–9 AM; the
+  6–9 AM availability is read from the next date's bookings, so a 6 AM booking
+  made on the next date still blocks a 5–7 AM booking (and vice versa). Stored
+  as the same `start_time`/`end_time`/`hours` as any booking ("5 AM"/"7 AM"/2).
+  Tests added in `slot-selection.test.ts` and `courts.test.ts`.
+
 ### Added
 
 - **Cash / online split for every payment.** A collection can now be part cash,

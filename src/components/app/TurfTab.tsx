@@ -81,6 +81,8 @@ import {
   partWindow,
   businessMinutes,
   businessDateOf,
+  BUSINESS_DAY_END,
+  BOOKING_MAX_END,
   type DayPartId,
 } from "@/lib/time-slot-utils";
 import { TurfCalendarCard } from "./TurfCalendarCard";
@@ -515,12 +517,19 @@ export function TurfTab({
           if (overlaps) taken.push(m);
         }
       }
+      // The next morning (6 AM … 9 AM) can't START a booking on this date but
+      // a booking may RUN into it (5 AM–7 AM), so its availability is needed
+      // too — occupancy already carries the next date's bookings at 1800+.
+      for (let m = BUSINESS_DAY_END; m < BOOKING_MAX_END; m += interval) {
+        if (assignCourts(occupied, totalCourts, m, interval, courts) === null)
+          taken.push(m);
+      }
       return taken;
     };
   }, [occupiedMinutesOn, interval, courts, totalCourts]);
 
-  // Business-day minutes (360 … 1800), so a night that runs past midnight is
-  // one continuous range and needs nothing from the next date.
+  // Business-day minutes (360 … 1980), so a night that runs past midnight (or
+  // on past 6 AM) is one continuous range and needs nothing from the next date.
   const bookedSlots = useMemo(
     () => takenOn(form.booking_date, editingId),
     [takenOn, form.booking_date, editingId],
@@ -550,6 +559,9 @@ export function TurfTab({
           ).length;
           free.set(m, minFree);
         }
+      }
+      for (let m = BUSINESS_DAY_END; m < BOOKING_MAX_END; m += interval) {
+        free.set(m, freeCourtIdsFor(occupied, totalCourts, m, interval).length);
       }
       return free;
     };

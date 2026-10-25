@@ -29,6 +29,15 @@ export type DayPartId = (typeof DAY_PARTS)[number]["id"];
 export const BUSINESS_DAY_START = 360;
 /** One past the last minute of the business day (6 AM the next morning). */
 export const BUSINESS_DAY_END = 1800;
+/**
+ * How far past 6 AM a booking may RUN. A booking still STARTS inside its own
+ * business day (6 AM … 5:30 AM), but it may keep going into the next morning,
+ * so an early 5 AM–7 AM game (starts in Late Night, ends after the 6 AM seam)
+ * is one booking instead of being impossible.
+ */
+export const BOOKING_OVERRUN_MINUTES = 180;
+/** Latest minute a booking may END (exclusive end boundary): 9 AM next day. */
+export const BOOKING_MAX_END = BUSINESS_DAY_END + BOOKING_OVERRUN_MINUTES;
 
 /** Clock minutes (0–1439) -> minutes inside the business day (360–1799). */
 export const businessMinutes = (clock: number) =>

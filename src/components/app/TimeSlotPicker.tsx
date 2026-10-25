@@ -21,6 +21,7 @@ import {
   PICKER_PARTS,
   partWindow,
   businessDateOf,
+  BOOKING_MAX_END,
   type DayPartId,
   SLOT_INTERVALS,
   minuteLabel,
@@ -398,38 +399,68 @@ export function TimeSlotPicker({
         })}
       </div>
 
-      {/* The closing end point of the day's last two parts — 12 AM after
-          Night, 6 AM after Late Night. Every other part closes on the first
-          slot of the next tab, which is already tappable as an end. */}
+      {/* The closing end point(s) of the day's last two parts. Night closes on
+          12 AM. Late Night closes on 6 AM, and — because a booking may run on
+          past the 6 AM seam (e.g. 5 AM–7 AM) — also offers the next-morning
+          end times up to 9 AM. Every other part closes on the first slot of
+          the next tab, which is already tappable as an end. */}
       {(part.id === "night" || part.id === "latenight") &&
-        selected.length > 0 &&
-        (() => {
-          const m = partTo;
-          const canEnd = canEndAt(selected, m, interval, booked);
-          const isEndNow = endBoundary === m;
-          return (
-            <button
-              type="button"
-              disabled={!canEnd && !isEndNow}
-              onClick={() => onToggleSlot(m)}
+        selected.length > 0 && (
+          <div className="space-y-1.5">
+            {part.id === "latenight" && (
+              <p className="text-center text-[11px] text-muted-foreground">
+                Ending later? Pick the end time (next morning)
+              </p>
+            )}
+            <div
               className={cn(
-                "w-full rounded-lg border py-2 text-xs font-medium transition-all",
-                isEndNow
-                  ? "border-2 border-dashed border-primary bg-primary/10 text-primary"
-                  : canEnd
-                    ? "frost-soft hover:border-primary hover:text-primary"
-                    : "cursor-not-allowed bg-muted text-muted-foreground opacity-60",
+                "grid gap-2",
+                part.id === "latenight" && interval <= 30
+                  ? "grid-cols-3"
+                  : part.id === "latenight"
+                    ? "grid-cols-2 min-[420px]:grid-cols-4"
+                    : "grid-cols-1",
               )}
             >
-              {isEndNow ? "Ends " : "End at "}
-              {minuteLabel(m)}
-            </button>
-          );
-        })()}
+              {Array.from(
+                {
+                  length:
+                    part.id === "latenight"
+                      ? Math.floor((BOOKING_MAX_END - partTo) / interval) + 1
+                      : 1,
+                },
+                (_, i) => partTo + i * interval,
+              ).map((m) => {
+                const canEnd = canEndAt(selected, m, interval, booked);
+                const isEndNow = endBoundary === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    disabled={!canEnd && !isEndNow}
+                    onClick={() => onToggleSlot(m)}
+                    className={cn(
+                      "w-full rounded-lg border py-2 text-xs font-medium transition-all",
+                      isEndNow
+                        ? "border-2 border-dashed border-primary bg-primary/10 text-primary"
+                        : canEnd
+                          ? "frost-soft hover:border-primary hover:text-primary"
+                          : "cursor-not-allowed bg-muted text-muted-foreground opacity-60",
+                    )}
+                  >
+                    {isEndNow ? "Ends " : "End at "}
+                    {minuteLabel(m, interval < 60)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
       {part.id === "latenight" && (
         <p className="text-center text-[11px] text-muted-foreground">
-          After midnight — these hours are booked under this date's night.
+          After midnight — these hours are booked under this date's night, and a
+          booking can run on until 9 AM.
         </p>
       )}
 
