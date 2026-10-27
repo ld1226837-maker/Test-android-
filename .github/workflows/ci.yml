@@ -166,7 +166,7 @@ jobs:
 
       # The NDK is ~1 GB: cache it so it is not downloaded on every run.
       - name: Cache Android NDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /usr/local/lib/android/sdk/ndk/${{ env.NDK_VERSION }}
           key: android-ndk-${{ env.NDK_VERSION }}
