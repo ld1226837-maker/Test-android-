@@ -198,7 +198,7 @@ jobs:
 
       # Caches Gradle dependencies and wrapper between runs (saves each build
       # re-downloading them). Write access to the cache only on main/tags.
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
