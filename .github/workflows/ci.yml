@@ -39,8 +39,6 @@ jobs:
     name: Typecheck, lint, test, build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    permissions:
-      contents: write   # only used to commit auto-fixed formatting on pushes to main
     steps:
       - uses: actions/checkout@v6
 
@@ -64,17 +62,7 @@ jobs:
       - name: Typecheck (app + scripts)
         run: npm run typecheck:all
 
-      - name: Auto-fix formatting (Prettier via ESLint) and commit
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          npx eslint . --fix || true
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -am "style: auto-fix formatting [skip ci]"
-            git push
-          fi
-
+      # Check only: CI never rewrites or pushes code. Run `npm run format` locally.
       - name: Lint (ESLint + Prettier)
         run: npm run lint
 
@@ -104,8 +92,6 @@ jobs:
     name: Rust check and tests
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    permissions:
-      contents: write   # only used to commit a refreshed Cargo.lock on pushes to main
     steps:
       - uses: actions/checkout@v6
 
@@ -131,47 +117,16 @@ jobs:
           mkdir -p .output/public
           echo '<!doctype html><title>ci</title>' > .output/public/index.html
 
-      # NOT "--locked" on purpose: the committed Cargo.lock is behind
-      # Cargo.toml (it lacks keyring and tauri-plugin-android-save). The
-      # drift step below hands you a refreshed lockfile to commit; after
-      # committing it, add --locked back to both commands.
+      # --locked: the committed Cargo.lock is the source of truth. The build
+      # fails if it is out of sync with Cargo.toml (fix: run `cargo update -w`
+      # in src-tauri and commit Cargo.lock), so releases are reproducible.
       - name: cargo check
         working-directory: src-tauri
-        run: cargo check --all-targets
+        run: cargo check --locked --all-targets
 
       - name: cargo test
         working-directory: src-tauri
-        run: cargo test
-
-      - name: Detect Cargo.lock drift
-        id: drift
-        run: |
-          if git diff --quiet -- src-tauri/Cargo.lock; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::src-tauri/Cargo.lock was behind Cargo.toml and has been refreshed."
-          fi
-
-      # On pushes to main the refreshed lockfile is committed for you, so the
-      # warning goes away on the next run. (Run "git pull --rebase" locally
-      # before your next push.) Pull requests get the artifact instead.
-      - name: Commit refreshed Cargo.lock
-        if: steps.drift.outputs.changed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/Cargo.lock
-          git commit -m "chore: refresh Cargo.lock [skip ci]"
-          git push
-
-      - name: Upload refreshed Cargo.lock
-        if: steps.drift.outputs.changed == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: Cargo.lock-refreshed
-          path: src-tauri/Cargo.lock
-          retention-days: 14
+        run: cargo test --locked
 
       # Advisory only: differences become a warning annotation, not a failure.
       # Make these strict by removing the "|| echo" parts.
@@ -209,6 +164,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The NDK is ~1 GB: cache it so it is not downloaded on every run.
+      - name: Cache Android NDK
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/android/sdk/ndk/${{ env.NDK_VERSION }}
+          key: android-ndk-${{ env.NDK_VERSION }}
+
       # ubuntu-latest already ships the Android SDK (ANDROID_HOME) and
       # sdkmanager. android-actions/setup-android tries to re-install "tools"
       # on top of it and fails, so use the preinstalled SDK directly.
@@ -234,6 +196,24 @@ jobs:
       - name: Install dependencies (exact lockfile)
         run: npm ci --no-audit --no-fund
 
+      # Caches Gradle dependencies and wrapper between runs (saves each build
+      # re-downloading them). Write access to the cache only on main/tags.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
+      # Android only accepts an APK as an update if its versionCode is higher
+      # than the installed one. Tauri derives it from "version" (0.1.0 -> 1000),
+      # so every build had the same code. Use the CI run number instead
+      # (always increasing; starts above the old fixed 1000).
+      - name: Set Android versionCode from the run number
+        run: |
+          set -euo pipefail
+          CODE=$((1000 + GITHUB_RUN_NUMBER))
+          jq --argjson c "$CODE" '.bundle.android.versionCode = $c' src-tauri/tauri.conf.json > /tmp/tauri.conf.json
+          mv /tmp/tauri.conf.json src-tauri/tauri.conf.json
+          echo "versionCode = $CODE"
+
       - name: Generate the Android project
         run: npx tauri android init --ci
 
@@ -248,9 +228,19 @@ jobs:
           RES=src-tauri/gen/android/app/src/main/res
           test -d "$SRC" || { echo "::error::$SRC is missing"; exit 1; }
           test -d "$RES" || { echo "::error::$RES was not generated"; exit 1; }
+          # A template .webp next to our .png would be a duplicate resource.
+          rm -f "$RES"/mipmap-*/ic_launcher*.webp
           cp -rf "$SRC"/. "$RES"/
-          grep -q "ic_launcher_background" "$RES/values/ic_launcher_background.xml"
-          echo "Launcher icons applied from $SRC"
+          # Verify every custom icon landed byte-for-byte.
+          fail=0
+          while IFS= read -r -d '' f; do
+            rel="${f#"$SRC"/}"
+            cmp -s "$f" "$RES/$rel" || { echo "::error::icon not applied: $rel"; fail=1; }
+          done < <(find "$SRC" -type f -print0)
+          [ "$fail" -eq 0 ] || exit 1
+          grep -q "@mipmap/ic_launcher" src-tauri/gen/android/app/src/main/AndroidManifest.xml \
+            || echo "::warning::AndroidManifest.xml does not reference @mipmap/ic_launcher"
+          echo "Launcher icons applied from $SRC ($(find "$SRC" -type f | wc -l) files)"
 
       # Safety net for R8 (release minification): Tink, pulled in by
       # androidx.security:security-crypto, references annotation classes that
@@ -290,6 +280,8 @@ jobs:
           set -euo pipefail
           VERSION=$(jq -r .version src-tauri/tauri.conf.json)
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+          # Non-tag builds carry the short commit id so each build is identifiable.
+          SUFFIX=""; [ "${GITHUB_REF_TYPE}" = "tag" ] || SUFFIX="-${GITHUB_SHA::7}"
           mkdir -p dist work
           if [ "$HAS_KEYSTORE" = "true" ]; then
             echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > work/release.jks
@@ -315,7 +307,7 @@ jobs:
             base=$(basename "$APK" -release-unsigned.apk)
             abi=${base#app-}
             "$BT/zipalign" -p -f 4 "$APK" "work/${abi}.apk"
-            OUT="dist/truff-android-v${VERSION}-${abi}.apk"
+            OUT="dist/truff-android-v${VERSION}${SUFFIX}-${abi}.apk"
             "$BT/apksigner" sign --ks work/release.jks --ks-key-alias "$KS_ALIAS" \
               --ks-pass env:KS_PASS --key-pass env:KEY_PASS --out "$OUT" "work/${abi}.apk"
             "$BT/apksigner" verify "$OUT"
@@ -395,8 +387,20 @@ jobs:
           name: Truff Snacks Android ${{ steps.rel.outputs.tag }}
           prerelease: ${{ steps.rel.outputs.pre == 'true' }}
           generate_release_notes: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           files: |
             dist/*.apk
             dist/SHA256SUMS.txt
             dist/SIGNING-NOTE.txt
+
+      # Keep the 10 newest build-N pre-releases; delete older ones and their tags.
+      - name: Prune old build pre-releases
+        if: github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName \
+            --jq '[.[] | select(.tagName | startswith("build-"))] | .[10:] | .[].tagName' \
+          | while read -r tag; do
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+            done
